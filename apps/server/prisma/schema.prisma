@@ -3,8 +3,10 @@ generator client {
 }
 
 datasource db {
-  // SQLite para a Fase 0 (dev local); Postgres entra na Fase 1 com o deploy no Render.
-  provider = "sqlite"
+  // Postgres (Neon) — dev local e produção partilham o mesmo provider/schema;
+  // a migração de SQLite (Fase 0-9) para Postgres aconteceu na Fase 10, antes
+  // do primeiro deploy real.
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
