@@ -1,20 +1,19 @@
-# DATABASE_URL below will point to the managed Postgres instance created here,
-# but apps/server/prisma/schema.prisma's datasource is still "sqlite" as of this
-# commit — swapping the provider + running a fresh migration against Postgres is
-# a deliberate manual step to do right before the first real deploy, not automated here.
+# Free plan (no Render-managed database — Postgres is hosted on Neon instead,
+# since Render's own free Postgres expires 30 days after creation). Prisma's
+# datasource is still "sqlite" as of this commit — swapping the provider +
+# running a fresh migration against the Neon database is a deliberate manual
+# step to do right before the first real deploy, not automated here.
 services:
   - type: web
     name: invoice-scanner-server
     runtime: docker
     dockerfilePath: ./apps/server/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: invoice-scanner-db
-          property: connectionString
+        sync: false
       - key: PORT
         value: 4001
       - key: GOOGLE_CLIENT_ID
@@ -31,9 +30,3 @@ services:
         sync: false
       - key: TOKEN_ENCRYPTION_KEY
         sync: false
-
-databases:
-  - name: invoice-scanner-db
-    plan: starter
-    databaseName: invoice_scanner
-    user: invoice_scanner
