@@ -114,6 +114,7 @@ export async function listExpenses(filter?: {
 export interface ExtractedDocument {
   parsedQr: ParsedInvoiceQr | null;
   qrRawPayload: string | null;
+  ocrFields: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
   originalFilePath: string;
   fileMimeType: string;
 }

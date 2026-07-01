@@ -8,6 +8,8 @@ export interface PendingCapture {
   photoHeight?: number;
   parsedQr: ParsedInvoiceQr | null;
   qrRawPayload?: string;
+  /** Preenchido pelo fallback OCR (server) quando não há QR — ver document-ingest.service.ts. */
+  ocrFields?: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
   /**
    * Presente quando o ficheiro já foi processado e gravado no servidor (upload
    * manual via /expenses/extract) — o ecrã de validação usa isto para não

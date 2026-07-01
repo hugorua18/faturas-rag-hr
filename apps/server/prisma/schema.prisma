@@ -65,6 +65,7 @@ model Expense {
 
   qrRawPayload     String?
   originalFilePath String? // caminho relativo em apps/server/uploads (Fase 0); Drive a partir da Fase 1
+  driveFileId      String? // Google Drive file id do ficheiro original, preenchido após arquivo bem sucedido
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

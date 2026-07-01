@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createCanvas, loadImage, DOMMatrix } from '@napi-rs/canvas';
 import jsQR from 'jsqr';
 import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
+import { extractTextViaOcr, heuristicFieldsFromOcrText } from './ocr.service';
 
 // pdf.js pede um DOMMatrix global para renderizar em Node (normalmente só existe no browser).
 (global as unknown as { DOMMatrix?: unknown }).DOMMatrix ??= DOMMatrix;
@@ -11,6 +12,7 @@ const standardFontDataUrl = path.join(path.dirname(require.resolve('pdfjs-dist/p
 export interface IngestedDocument {
   parsedQr: ParsedInvoiceQr | null;
   qrText: string | null;
+  ocrFields: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
   imageBuffer: Buffer;
   imageMimeType: 'image/png' | 'image/jpeg';
 }
@@ -57,5 +59,16 @@ export async function ingestDocument(buffer: Buffer, mimeType: string): Promise<
   const qrText = await decodeQrFromImageBuffer(imageBuffer);
   const parsedQr = qrText ? parseInvoiceQr(qrText) : null;
 
-  return { parsedQr, qrText, imageBuffer, imageMimeType };
+  // OCR é só um fallback quando o QR falha — se já temos um resultado fiável
+  // do QR, não vale a pena gastar tempo/CPU a correr o Tesseract.
+  let ocrFields: IngestedDocument['ocrFields'] = null;
+  if (!parsedQr) {
+    const ocrText = await extractTextViaOcr(imageBuffer);
+    if (ocrText) {
+      const fields = heuristicFieldsFromOcrText(ocrText);
+      ocrFields = Object.keys(fields).length > 0 ? fields : null;
+    }
+  }
+
+  return { parsedQr, qrText, ocrFields, imageBuffer, imageMimeType };
 }

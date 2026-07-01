@@ -58,6 +58,16 @@ export default function ValidationScreen() {
       if (qr.baseAmount !== null) setAmountBase(qr.baseAmount.toFixed(2));
       if (qr.vatAmount !== null) setAmountVat(qr.vatAmount.toFixed(2));
       if (qr.totalAmount !== null) setAmountTotal(qr.totalAmount.toFixed(2));
+    } else if (pending?.ocrFields) {
+      // Sem QR: preenchimento parcial e best-effort a partir do OCR — só os
+      // campos que a heurística conseguiu extrair, o resto fica em branco
+      // para o utilizador confirmar/preencher à mão.
+      const ocr = pending.ocrFields;
+      if (ocr.issuerNif !== undefined) setSupplierNif(ocr.issuerNif);
+      if (ocr.documentDate !== undefined) setDocumentDate(ocr.documentDate);
+      if (ocr.baseAmount !== undefined && ocr.baseAmount !== null) setAmountBase(ocr.baseAmount.toFixed(2));
+      if (ocr.vatAmount !== undefined && ocr.vatAmount !== null) setAmountVat(ocr.vatAmount.toFixed(2));
+      if (ocr.totalAmount !== undefined && ocr.totalAmount !== null) setAmountTotal(ocr.totalAmount.toFixed(2));
     }
   }, []);
 
@@ -170,18 +180,31 @@ export default function ValidationScreen() {
         <View
           style={[
             styles.qrBanner,
-            { backgroundColor: capture.parsedQr ? '#34C75920' : theme.backgroundElement },
+            {
+              backgroundColor: capture.parsedQr
+                ? '#34C75920'
+                : capture.ocrFields
+                  ? '#FF9F0A20'
+                  : theme.backgroundElement,
+            },
           ]}
         >
           <Ionicons
-            name={capture.parsedQr ? 'checkmark-circle' : 'information-circle-outline'}
+            name={capture.parsedQr ? 'checkmark-circle' : capture.ocrFields ? 'text-outline' : 'information-circle-outline'}
             size={18}
-            color={capture.parsedQr ? theme.success : theme.textSecondary}
+            color={capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary}
           />
-          <Text style={[styles.qrBannerText, { color: capture.parsedQr ? theme.success : theme.textSecondary }]}>
+          <Text
+            style={[
+              styles.qrBannerText,
+              { color: capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary },
+            ]}
+          >
             {capture.parsedQr
               ? `QR code detetado — ATCUD ${capture.parsedQr.atcud || 'n/d'} · doc. ${capture.parsedQr.documentId || 'n/d'}`
-              : 'Sem QR code — preenche os campos manualmente.'}
+              : capture.ocrFields
+                ? 'Extraído por OCR (sem QR) — confirma os campos preenchidos.'
+                : 'Sem QR code — preenche os campos manualmente.'}
           </Text>
         </View>
 

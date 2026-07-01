@@ -3,11 +3,30 @@ import { NO_DATE_KEY, NO_NIF_KEY, type ExpenseType } from '@invoice-scanner/shar
 import { prisma } from '../db/prisma';
 import { buildMonthlyReportPdf, type ExpenseForReport } from '../services/report-pdf.service';
 import { buildMonthlyReportExcel } from '../services/report-excel.service';
+import { uploadReportToDrive } from '../services/drive.service';
 
 export const reportsRouter = Router();
 
 function nifFilterValue(nifParam: string): string | null {
   return nifParam === NO_NIF_KEY ? null : nifParam;
+}
+
+// Arquivo no Drive é best-effort: o utilizador tem sempre o ficheiro que pediu,
+// o Drive é só um bónus — uma falha aqui nunca deve impedir res.send(buffer).
+async function archiveReportToDriveBestEffort(
+  user: Express.Request['user'],
+  nif: string,
+  period: string,
+  buffer: Buffer,
+  mimeType: string,
+  extension: 'pdf' | 'xlsx',
+): Promise<void> {
+  if (!user) return;
+  try {
+    await uploadReportToDrive(user, nif, period, buffer, mimeType, extension);
+  } catch (err) {
+    console.error(`[drive] falha ao arquivar o relatório ${nif}/${period}.${extension} no Drive`, err);
+  }
 }
 
 async function loadMonthlyReportData(userId: string, nifParam: string, periodParam: string) {
@@ -54,6 +73,7 @@ reportsRouter.get('/:nif/:period/pdf', async (req, res) => {
   try {
     const { expenses, status } = await loadMonthlyReportData(req.user!.id, nif, period);
     const buffer = await buildMonthlyReportPdf(nif, label, status, expenses);
+    await archiveReportToDriveBestEffort(req.user, nif, period, buffer, 'application/pdf', 'pdf');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${period}.pdf"`);
     res.send(buffer);
@@ -69,6 +89,14 @@ reportsRouter.get('/:nif/:period/xlsx', async (req, res) => {
   try {
     const { expenses, status } = await loadMonthlyReportData(req.user!.id, nif, period);
     const buffer = await buildMonthlyReportExcel(nif, label, status, expenses);
+    await archiveReportToDriveBestEffort(
+      req.user,
+      nif,
+      period,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'xlsx',
+    );
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${period}.xlsx"`);
     res.send(buffer);
@@ -90,6 +118,9 @@ reportsRouter.get('/:nif/pdf', async (req, res) => {
   try {
     const { expenses } = await loadRangeReportData(req.user!.id, nif, from, to);
     const buffer = await buildMonthlyReportPdf(nif, label || `${from} a ${to}`, null, expenses);
+    // Usa o intervalo em bruto (não o "label" livre) como período no caminho do
+    // Drive — o label pode ter espaços/acentos, inseguros num nome de ficheiro.
+    await archiveReportToDriveBestEffort(req.user, nif, `${from}-a-${to}`, buffer, 'application/pdf', 'pdf');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${from}-a-${to}.pdf"`);
     res.send(buffer);
@@ -109,6 +140,14 @@ reportsRouter.get('/:nif/xlsx', async (req, res) => {
   try {
     const { expenses } = await loadRangeReportData(req.user!.id, nif, from, to);
     const buffer = await buildMonthlyReportExcel(nif, label || `${from} a ${to}`, null, expenses);
+    await archiveReportToDriveBestEffort(
+      req.user,
+      nif,
+      `${from}-a-${to}`,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'xlsx',
+    );
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${from}-a-${to}.xlsx"`);
     res.send(buffer);

@@ -1,0 +1,39 @@
+# DATABASE_URL below will point to the managed Postgres instance created here,
+# but apps/server/prisma/schema.prisma's datasource is still "sqlite" as of this
+# commit — swapping the provider + running a fresh migration against Postgres is
+# a deliberate manual step to do right before the first real deploy, not automated here.
+services:
+  - type: web
+    name: invoice-scanner-server
+    runtime: docker
+    dockerfilePath: ./apps/server/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: invoice-scanner-db
+          property: connectionString
+      - key: PORT
+        value: 4001
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_SIGNIN_CLIENT_ID
+        sync: false
+      - key: GOOGLE_SIGNIN_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_SIGNIN_IOS_CLIENT_ID
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+
+databases:
+  - name: invoice-scanner-db
+    plan: starter
+    databaseName: invoice_scanner
+    user: invoice_scanner

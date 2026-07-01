@@ -90,7 +90,7 @@ export default function CameraScreen() {
   async function processPickedAsset(asset: { uri: string; name: string; mimeType?: string | null }) {
     setBusy(true);
     try {
-      const { parsedQr, qrRawPayload, originalFilePath, fileMimeType } = await extractDocument({
+      const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileMimeType } = await extractDocument({
         uri: asset.uri,
         name: asset.name,
         mimeType: asset.mimeType ?? 'application/octet-stream',
@@ -100,6 +100,7 @@ export default function CameraScreen() {
         fileMimeType,
         parsedQr,
         qrRawPayload: qrRawPayload ?? undefined,
+        ocrFields,
         existingFilePath: originalFilePath,
       });
       router.push('/validation');

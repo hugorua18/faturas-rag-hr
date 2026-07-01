@@ -3,9 +3,11 @@ import multer from 'multer';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import type { User } from '@prisma/client';
 import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_KEY, NO_DATE_KEY } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
+import { uploadInvoiceToDrive } from '../services/drive.service';
 
 const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -41,6 +43,34 @@ function deleteUploadedFile(originalFilePath: string | null | undefined): void {
   });
 }
 
+function mimeTypeForFilePath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  return 'image/png';
+}
+
+// Arquivo no Drive é best-effort: nunca deve atrasar/bloquear a resposta ao
+// cliente nem falhar o pedido — a despesa já está guardada localmente, que é
+// o que importa. Falhas (sem refresh token, erro de rede/API) só são logadas,
+// por isso corre em segundo plano (não é feito "await" no handler da rota).
+function archiveInvoiceToDriveBestEffort(
+  user: User,
+  expense: { id: string; documentDate: string | null; originalFilePath: string | null },
+): void {
+  if (!expense.originalFilePath) return;
+  const absolutePath = path.join(uploadsDir, '..', expense.originalFilePath);
+  void (async () => {
+    try {
+      const fileBuffer = fs.readFileSync(absolutePath);
+      const mimeType = mimeTypeForFilePath(expense.originalFilePath!);
+      const driveFileId = await uploadInvoiceToDrive(user, expense, fileBuffer, mimeType);
+      await prisma.expense.update({ where: { id: expense.id }, data: { driveFileId } });
+    } catch (err) {
+      console.error(`[drive] falha ao arquivar a despesa ${expense.id} no Drive`, err);
+    }
+  })();
+}
+
 expensesRouter.get('/', async (req, res) => {
   const { acquirerNif, period, status } = req.query as { acquirerNif?: string; period?: string; status?: string };
   const where: Record<string, unknown> = {
@@ -67,14 +97,14 @@ expensesRouter.post('/extract', upload.single('file'), async (req, res) => {
   }
   try {
     const fileBuffer = fs.readFileSync(req.file.path);
-    const { parsedQr, qrText, imageBuffer, imageMimeType } = await ingestDocument(fileBuffer, req.file.mimetype);
+    const { parsedQr, qrText, ocrFields, imageBuffer, imageMimeType } = await ingestDocument(fileBuffer, req.file.mimetype);
     deleteUploadedFile(`uploads/${req.file.filename}`);
 
     const ext = imageMimeType === 'image/png' ? '.png' : '.jpg';
     const filename = `${crypto.randomUUID()}${ext}`;
     fs.writeFileSync(path.join(uploadsDir, filename), imageBuffer);
 
-    res.json({ parsedQr, qrRawPayload: qrText, originalFilePath: `uploads/${filename}`, fileMimeType: imageMimeType });
+    res.json({ parsedQr, qrRawPayload: qrText, ocrFields, originalFilePath: `uploads/${filename}`, fileMimeType: imageMimeType });
   } catch (err) {
     deleteUploadedFile(`uploads/${req.file.filename}`);
     res.status(400).json({ error: err instanceof Error ? err.message : 'Falha ao processar o ficheiro' });
@@ -219,6 +249,8 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
       originalFilePath: req.file ? `uploads/${req.file.filename}` : body.existingFilePath || undefined,
     },
   });
+
+  archiveInvoiceToDriveBestEffort(req.user!, expense);
 
   res.status(201).json(expense);
 });
