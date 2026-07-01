@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.turbo/
+.expo/
+.expo-shared/
+*.log
+.env
+.env.local
+apps/server/prisma/dev.db
+apps/server/prisma/dev.db-journal
+apps/server/uploads/
+.DS_Store

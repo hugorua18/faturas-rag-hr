@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // SQLite para a Fase 0 (dev local); Postgres entra na Fase 1 com o deploy no Render.
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Nota: SQLite não suporta enums nativamente no Prisma, por isso status/source/type
+// ficam como String, validados na app contra @invoice-scanner/shared (ExpenseType, etc).
+model User {
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  googleId              String    @unique
+  googleRefreshTokenEnc String? // refresh token do Google Sign-In, cifrado (AES-256-GCM) — usado pela Fase 8 (arquivo no Drive)
+  driveRootFolderId     String? // não usado até à Fase 8, coluna criada agora para evitar outra migração
+  createdAt             DateTime  @default(now())
+  expenses              Expense[]
+  sessions              Session[]
+  monthlyReportStatuses MonthlyReportStatus[]
+}
+
+// Sessão de app (Google Sign-In do utilizador final) — distinta do fluxo OAuth do
+// Gmail (poller de ingestão), que não usa nenhuma destas tabelas.
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Expense {
+  id     String  @id @default(uuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  status String @default("SUBMETIDA") // TRATAMENTO_MANUAL | SUBMETIDA
+  source String // CAMERA | EMAIL | UPLOAD
+  type   String // um dos EXPENSE_TYPES de @invoice-scanner/shared
+
+  supplierName String?
+  supplierNif  String?
+  acquirerNif  String?
+  documentType String?
+  documentId   String? // nº do documento (campo G do QR, ex: "FS HOS/3980") — usado para detetar duplicados
+  documentDate String? // ISO YYYY-MM-DD
+  documentTime String? // HH:MM
+
+  // amountBase/Vat/Total são sempre em EUR (usados em todos os relatórios/somas).
+  // Quando currency != "EUR", os valores originais na moeda da fatura ficam em
+  // originalAmount* e amountBase/Vat/Total são calculados a partir do câmbio
+  // introduzido manualmente (ver validation.tsx / expense/[id].tsx).
+  amountBase  Float?
+  amountVat   Float?
+  amountTotal Float?
+
+  currency           String  @default("EUR")
+  originalAmountBase  Float?
+  originalAmountVat   Float?
+  originalAmountTotal Float?
+
+  qrRawPayload     String?
+  originalFilePath String? // caminho relativo em apps/server/uploads (Fase 0); Drive a partir da Fase 1
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([documentDate])
+  @@index([supplierNif, documentId])
+}
+
+// Estado do relatório mensal por NIF adquirente (Aberto | Enviado para contabilista).
+// acquirerNif/period usam os sentinelas NO_NIF_KEY/NO_DATE_KEY ("sem-nif"/"sem-data")
+// de @invoice-scanner/shared em vez de null, para a unique constraint funcionar sempre.
+// userId é opcional (tal como em Expense) para acomodar dados de dev anteriores à
+// Fase 7, mas todas as rotas exigem sessão e filtram por utilizador — ver expenses.ts/reports.ts.
+model MonthlyReportStatus {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  acquirerNif String
+  period      String
+  status      String   @default("ABERTO") // ABERTO | ENVIADO_CONTABILISTA
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, acquirerNif, period])
+}
+
+// Idempotência do polling do Gmail — cada mensagem só é processada uma vez,
+// mesmo que não tenha nenhum anexo válido (evita reprocessar para sempre).
+model ProcessedEmail {
+  id             String   @id @default(uuid())
+  gmailMessageId String   @unique
+  processedAt    DateTime @default(now())
+}
