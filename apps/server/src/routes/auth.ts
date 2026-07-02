@@ -26,7 +26,12 @@ authRouter.post('/google/callback', async (req, res) => {
   }
 
   try {
-    const { idToken, refreshToken } = await exchangeAuthCodeForTokens(code, redirectUri, codeVerifier, clientId);
+    const { idToken, refreshToken, usedClientId } = await exchangeAuthCodeForTokens(
+      code,
+      redirectUri,
+      codeVerifier,
+      clientId,
+    );
     const identity = await verifyGoogleIdToken(idToken);
     if (!identity.emailVerified) {
       res.status(401).json({ error: 'O email da conta Google não está verificado' });
@@ -36,21 +41,26 @@ authRouter.post('/google/callback', async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { googleId: identity.sub } });
     // O Google só devolve refresh_token no primeiro consentimento — num
     // re-login normal não vem nenhum, e não podemos apagar um que já exista.
+    // googleAuthClientId acompanha sempre o token: um refresh token só é
+    // utilizável pelo cliente (web/iOS) que o emitiu.
     const encryptedRefreshToken = refreshToken ? encryptRefreshToken(refreshToken) : undefined;
+    const refreshTokenFields = encryptedRefreshToken
+      ? { googleRefreshTokenEnc: encryptedRefreshToken, googleAuthClientId: usedClientId }
+      : {};
 
     const user = existing
       ? await prisma.user.update({
           where: { id: existing.id },
           data: {
             email: identity.email,
-            ...(encryptedRefreshToken ? { googleRefreshTokenEnc: encryptedRefreshToken } : {}),
+            ...refreshTokenFields,
           },
         })
       : await prisma.user.create({
           data: {
             email: identity.email,
             googleId: identity.sub,
-            googleRefreshTokenEnc: encryptedRefreshToken,
+            ...refreshTokenFields,
           },
         });
 

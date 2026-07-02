@@ -17,6 +17,7 @@ model User {
   email                 String    @unique
   googleId              String    @unique
   googleRefreshTokenEnc String? // refresh token do Google Sign-In, cifrado (AES-256-GCM) — usado pela Fase 8 (arquivo no Drive)
+  googleAuthClientId    String? // client id OAuth que emitiu o refresh token acima — um refresh token só é utilizável pelo cliente que o emitiu (web vs iOS); null = cliente web (linhas antigas)
   driveRootFolderId     String? // não usado até à Fase 8, coluna criada agora para evitar outra migração
   createdAt             DateTime  @default(now())
   expenses              Expense[]

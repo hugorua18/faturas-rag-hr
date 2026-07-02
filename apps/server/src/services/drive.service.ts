@@ -7,17 +7,34 @@ import { decryptRefreshToken } from './google-auth.service';
 // Mesmas variáveis do Google Sign-In (Fase 7) — NÃO as do poller do Gmail
 // (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN), que são um fluxo
 // OAuth completamente separado para uma caixa de correio de ingestão dedicada.
-const GOOGLE_SIGNIN_CLIENT_ID = process.env.GOOGLE_SIGNIN_CLIENT_ID;
-const GOOGLE_SIGNIN_CLIENT_SECRET = process.env.GOOGLE_SIGNIN_CLIENT_SECRET;
+// .trim(): ver google-auth.service.ts — valores colados no Render podem trazer
+// whitespace invisível que quebra comparações exatas.
+const GOOGLE_SIGNIN_CLIENT_ID = process.env.GOOGLE_SIGNIN_CLIENT_ID?.trim();
+const GOOGLE_SIGNIN_CLIENT_SECRET = process.env.GOOGLE_SIGNIN_CLIENT_SECRET?.trim();
+const GOOGLE_SIGNIN_IOS_CLIENT_ID = process.env.GOOGLE_SIGNIN_IOS_CLIENT_ID?.trim();
 
-export function getDriveClientForUser(user: { googleRefreshTokenEnc: string | null }): drive_v3.Drive {
+export function getDriveClientForUser(user: {
+  googleRefreshTokenEnc: string | null;
+  googleAuthClientId: string | null;
+}): drive_v3.Drive {
   if (!user.googleRefreshTokenEnc) {
     throw new Error('Utilizador sem refresh token do Google Sign-In — não é possível arquivar no Drive');
   }
+  const refreshToken = decryptRefreshToken(user.googleRefreshTokenEnc);
+
+  // Um refresh token só é utilizável pelo cliente OAuth que o emitiu: se o login
+  // foi feito na app iOS, o refresh tem de usar o cliente iOS (público, sem
+  // secret); usar o cliente Web com um token iOS falha com "unauthorized_client".
+  // null = linhas antigas, todas emitidas pelo cliente Web.
+  if (user.googleAuthClientId && GOOGLE_SIGNIN_IOS_CLIENT_ID && user.googleAuthClientId === GOOGLE_SIGNIN_IOS_CLIENT_ID) {
+    const auth = new google.auth.OAuth2(GOOGLE_SIGNIN_IOS_CLIENT_ID);
+    auth.setCredentials({ refresh_token: refreshToken });
+    return google.drive({ version: 'v3', auth });
+  }
+
   if (!GOOGLE_SIGNIN_CLIENT_ID || !GOOGLE_SIGNIN_CLIENT_SECRET) {
     throw new Error('GOOGLE_SIGNIN_CLIENT_ID / GOOGLE_SIGNIN_CLIENT_SECRET não estão configurados (apps/server/.env)');
   }
-  const refreshToken = decryptRefreshToken(user.googleRefreshTokenEnc);
   const auth = new google.auth.OAuth2(GOOGLE_SIGNIN_CLIENT_ID, GOOGLE_SIGNIN_CLIENT_SECRET);
   auth.setCredentials({ refresh_token: refreshToken });
   return google.drive({ version: 'v3', auth });

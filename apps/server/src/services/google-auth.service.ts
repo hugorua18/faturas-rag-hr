@@ -26,9 +26,15 @@ function getOAuth2Client(redirectUri?: string): OAuth2Client {
 // usou para pedir a autorização (senão o Google rejeita o /token com
 // "client_id mismatch"). O client id iOS não tem secret (fluxo público, PKCE);
 // os restantes (web/dev) usam o client secret do servidor.
-function getOAuth2ClientForExchange(redirectUri: string, clientId: string | undefined): OAuth2Client {
-  if (clientId && clientId === GOOGLE_SIGNIN_IOS_CLIENT_ID) {
-    return new OAuth2Client(GOOGLE_SIGNIN_IOS_CLIENT_ID, undefined, redirectUri);
+function getOAuth2ClientForExchange(
+  redirectUri: string,
+  clientId: string | undefined,
+): { client: OAuth2Client; usedClientId: string } {
+  if (clientId && GOOGLE_SIGNIN_IOS_CLIENT_ID && clientId === GOOGLE_SIGNIN_IOS_CLIENT_ID) {
+    return {
+      client: new OAuth2Client(GOOGLE_SIGNIN_IOS_CLIENT_ID, undefined, redirectUri),
+      usedClientId: GOOGLE_SIGNIN_IOS_CLIENT_ID,
+    };
   }
   // Trocar um code emitido para outro cliente falha no Google com um
   // "unauthorized_client" opaco — este aviso torna o desalinhamento entre o
@@ -42,13 +48,17 @@ function getOAuth2ClientForExchange(redirectUri: string, clientId: string | unde
         'Verifica a variável GOOGLE_SIGNIN_IOS_CLIENT_ID no Render.',
     );
   }
-  return getOAuth2Client(redirectUri);
+  return { client: getOAuth2Client(redirectUri), usedClientId: GOOGLE_SIGNIN_CLIENT_ID! };
 }
 
 export interface ExchangedTokens {
   idToken: string;
   accessToken: string;
   refreshToken: string | null;
+  // Client id que fez a troca — um refresh token só é utilizável pelo cliente
+  // que o emitiu, por isso quem o guardar tem de guardar também este id
+  // (User.googleAuthClientId) para o Drive usar o cliente certo no refresh.
+  usedClientId: string;
 }
 
 // Troca o "authorization code" (PKCE) recebido do cliente móvel pelos tokens do
@@ -62,7 +72,7 @@ export async function exchangeAuthCodeForTokens(
   codeVerifier?: string,
   clientId?: string,
 ): Promise<ExchangedTokens> {
-  const client = getOAuth2ClientForExchange(redirectUri, clientId);
+  const { client, usedClientId } = getOAuth2ClientForExchange(redirectUri, clientId);
   const { tokens } = await client.getToken({ code, redirect_uri: redirectUri, codeVerifier });
 
   if (!tokens.id_token || !tokens.access_token) {
@@ -73,6 +83,7 @@ export async function exchangeAuthCodeForTokens(
     idToken: tokens.id_token,
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token ?? null,
+    usedClientId,
   };
 }
 

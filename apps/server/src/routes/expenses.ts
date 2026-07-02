@@ -335,10 +335,12 @@ expensesRouter.patch('/:id', async (req, res) => {
         originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
       },
     });
-    // As despesas vindas do email só chegam a SUBMETIDA por aqui (o POST / nunca
-    // as vê), por isso este é o único ponto onde podem ser arquivadas no Drive.
-    // O NIF adquirente também só fica definitivo neste momento (ecrã de revisão).
-    if (existing.status === 'TRATAMENTO_MANUAL' && expense.status === 'SUBMETIDA' && !expense.driveFileId) {
+    // Arquiva no Drive qualquer despesa submetida que ainda não tenha ficheiro
+    // lá (driveFileId null): cobre as despesas vindas do email (que só chegam a
+    // SUBMETIDA por aqui — o POST / nunca as vê) e serve de retry natural para
+    // arquivos que falharam na criação (ex: token inválido na altura) — basta
+    // guardar a despesa outra vez. driveFileId preenchido garante idempotência.
+    if (expense.status === 'SUBMETIDA' && !expense.driveFileId) {
       archiveInvoiceToDriveBestEffort(req.user!, expense);
     }
     res.json(toExpenseJson(expense));
