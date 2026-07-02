@@ -41,6 +41,13 @@ export default function LoginScreen() {
       redirectUri,
       // expo-auth-session usa PKCE por omissão para o response type 'code'.
       responseType: 'code',
+      // access_type=offline é obrigatório para o Google alguma vez devolver um
+      // refresh_token — sem isto NENHUM login (nem o primeiro) recebe um, e o
+      // arquivo no Drive (Fase 8) falha sempre em silêncio ("Utilizador sem
+      // refresh token do Google Sign-In"). prompt=consent força sempre o ecrã
+      // de consentimento, para contas que já autorizaram a app antes deste fix
+      // (sem refresh_token guardado) também conseguirem obter um novo.
+      extraParams: { access_type: 'offline', prompt: 'consent' },
     },
     discovery,
   );
