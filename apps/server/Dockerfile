@@ -11,7 +11,7 @@ RUN corepack enable
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY apps/server/package.json apps/server/
 COPY packages/shared/package.json packages/shared/
 
@@ -24,6 +24,12 @@ COPY apps/server apps/server
 # para dist/ antes do server, cujo "node dist/index.js" (CommonJS, sem
 # tsx/ts-node) não consegue resolver imports extensionless para ficheiros .ts.
 RUN pnpm --filter @invoice-scanner/shared build
+
+# @prisma/client só existe com tipos (PrismaClient, User, etc.) depois de
+# "prisma generate" correr contra prisma/schema.prisma — não há postinstall
+# automático para isto, tem de ser explícito antes do tsc do server.
+RUN pnpm --filter @invoice-scanner/server exec prisma generate
+
 RUN pnpm --filter @invoice-scanner/server build
 
 WORKDIR /app/apps/server
