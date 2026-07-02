@@ -1,5 +1,10 @@
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 
+# pdfjs-dist@6 (document-ingest.service.ts, faturas em PDF) usa
+# ArrayBuffer.prototype.transferToFixedLength internamente — não existe no
+# Node 20, só a partir do Node 22 (V8 12.1+). Sem isto, a renderização da
+# página falha silenciosamente ("ignoring errors during GetOperatorList") e
+# a imagem/QR extraídos ficam em branco, mesmo sem nenhum erro visível na resposta.
 # tesseract-ocr-por: dados de treino em português — necessário para o fallback
 # OCR (ver ocr.service.ts, que corre "tesseract ... -l por").
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-por \
