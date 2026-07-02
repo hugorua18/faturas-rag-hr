@@ -25,6 +25,20 @@ function resolveClientId(): string {
     : GOOGLE_SIGNIN_CLIENT_ID_WEB;
 }
 
+// Os clientes OAuth iOS do Google só aceitam como redirect o esquema
+// "reverse client ID" (com.googleusercontent.apps.<id>:/oauth2redirect) —
+// qualquer outro esquema (ex: invoicescanner://) é rejeitado pelo Google com
+// "Acesso bloqueado / Erro 400: invalid_request" antes sequer de mostrar o
+// seletor de contas. Este esquema também tem de estar registado no app.json
+// ("scheme") para o redirect voltar a abrir a app.
+function resolveRedirectUri(): string {
+  if (Platform.OS === 'ios' && GOOGLE_SIGNIN_CLIENT_ID_IOS.endsWith('.apps.googleusercontent.com')) {
+    const id = GOOGLE_SIGNIN_CLIENT_ID_IOS.replace('.apps.googleusercontent.com', '');
+    return `com.googleusercontent.apps.${id}:/oauth2redirect`;
+  }
+  return AuthSession.makeRedirectUri({ scheme: 'invoicescanner' });
+}
+
 export default function LoginScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -32,7 +46,7 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const discovery = AuthSession.useAutoDiscovery('https://accounts.google.com');
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'invoicescanner' });
+  const redirectUri = resolveRedirectUri();
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
