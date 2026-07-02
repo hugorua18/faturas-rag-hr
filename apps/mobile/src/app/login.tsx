@@ -47,7 +47,11 @@ export default function LoginScreen() {
       // refresh token do Google Sign-In"). prompt=consent força sempre o ecrã
       // de consentimento, para contas que já autorizaram a app antes deste fix
       // (sem refresh_token guardado) também conseguirem obter um novo.
-      extraParams: { access_type: 'offline', prompt: 'consent' },
+      // select_account força o seletor de contas: sem ele, no iOS (onde o
+      // browser de autenticação partilha a sessão Google do Safari) o Google
+      // escolhe silenciosamente a conta já autenticada, sem dar hipótese de
+      // usar outra conta (ex: faturas.rag.hr em vez da conta pessoal).
+      extraParams: { access_type: 'offline', prompt: 'select_account consent' },
     },
     discovery,
   );
