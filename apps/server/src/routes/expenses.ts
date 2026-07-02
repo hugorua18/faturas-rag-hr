@@ -76,7 +76,7 @@ function mimeTypeForFilePath(filePath: string): string {
 // por isso corre em segundo plano (não é feito "await" no handler da rota).
 function archiveInvoiceToDriveBestEffort(
   user: User,
-  expense: { id: string; documentDate: string | null; originalFilePath: string | null },
+  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
 ): void {
   const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
   if (!absolutePath) return;
@@ -335,6 +335,12 @@ expensesRouter.patch('/:id', async (req, res) => {
         originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
       },
     });
+    // As despesas vindas do email só chegam a SUBMETIDA por aqui (o POST / nunca
+    // as vê), por isso este é o único ponto onde podem ser arquivadas no Drive.
+    // O NIF adquirente também só fica definitivo neste momento (ecrã de revisão).
+    if (existing.status === 'TRATAMENTO_MANUAL' && expense.status === 'SUBMETIDA' && !expense.driveFileId) {
+      archiveInvoiceToDriveBestEffort(req.user!, expense);
+    }
     res.json(toExpenseJson(expense));
   } catch {
     res.status(404).json({ error: 'Despesa não encontrada' });

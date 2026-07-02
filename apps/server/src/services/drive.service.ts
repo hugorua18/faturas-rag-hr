@@ -60,14 +60,18 @@ function extensionForMimeType(mimeType: string): string {
 
 export async function uploadInvoiceToDrive(
   user: User,
-  expense: { id: string; documentDate: string | null; originalFilePath: string | null },
+  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
   fileBuffer: Buffer,
   mimeType: string,
 ): Promise<string> {
   const drive = getDriveClientForUser(user);
+  // Uma pasta por NIF adquirente em vez de uma pasta única "Faturas" — espelha
+  // a organização da app (despesas agrupadas por NIF) e facilita entregar as
+  // faturas de um NIF ao contabilista sem misturar com as dos outros.
+  const nifFolder = expense.acquirerNif || 'Sem NIF';
   const year = expense.documentDate ? expense.documentDate.slice(0, 4) : NO_DATE_KEY;
   const month = expense.documentDate ? expense.documentDate.slice(5, 7) : NO_DATE_KEY;
-  const folderId = await ensureFolderPath(drive, ['DespesasApp', 'Faturas', year, month], user.driveRootFolderId);
+  const folderId = await ensureFolderPath(drive, ['DespesasApp', nifFolder, year, month], user.driveRootFolderId);
   const filename = `${expense.id}${extensionForMimeType(mimeType)}`;
 
   const { data } = await drive.files.create({
