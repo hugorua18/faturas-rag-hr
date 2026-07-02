@@ -1,17 +1,19 @@
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
-import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { router, Stack } from 'expo-router';
+import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { parseInvoiceQr } from '@invoice-scanner/shared';
 
 import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
-import { extractDocument, logout, resolveFileUrl } from '@/api/client';
-import { notify, confirmAction } from '@/utils/alert';
+import { usePendingCount } from '@/hooks/use-pending-count';
+import { logout } from '@/api/client';
+import { pickAndImportDocument } from '@/utils/import-document';
+import { confirmAction } from '@/utils/alert';
+import { PendingCountBadge } from '@/components/pending-count-badge';
 
 const FRAME_SIZE = 260;
 const CORNER_LENGTH = 32;
@@ -51,9 +53,21 @@ function isWithinGuideFrame(
   );
 }
 
-export default function CameraScreen() {
+export default function IndexScreen() {
+  const params = useLocalSearchParams<{ camera?: string }>();
+  // Na Web a "casa" é a lista de despesas — a câmara só abre quando pedida
+  // explicitamente (menu "+" → Tirar foto, que navega para /?camera=1). No
+  // iOS/Android a câmara continua a ser o ecrã inicial.
+  if (Platform.OS === 'web' && params.camera !== '1') {
+    return <Redirect href="/expenses" />;
+  }
+  return <CameraScreen />;
+}
+
+function CameraScreen() {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
+  const pendingCount = usePendingCount();
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   // null = ainda a tentar ler o QR; string = QR lido e confirmado (moldura
@@ -87,35 +101,14 @@ export default function CameraScreen() {
     }
   }
 
-  async function processPickedAsset(asset: { uri: string; name: string; mimeType?: string | null }) {
+  async function handleUploadDocument() {
+    if (busy) return;
     setBusy(true);
     try {
-      const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileUrl, fileMimeType } = await extractDocument({
-        uri: asset.uri,
-        name: asset.name,
-        mimeType: asset.mimeType ?? 'application/octet-stream',
-      });
-      setPendingCapture({
-        fileUri: fileUrl ? resolveFileUrl(fileUrl) : asset.uri,
-        fileMimeType,
-        parsedQr,
-        qrRawPayload: qrRawPayload ?? undefined,
-        ocrFields,
-        existingFilePath: originalFilePath,
-      });
-      router.push('/validation');
-    } catch (err) {
-      notify('Erro', err instanceof Error ? err.message : 'Falha ao processar o ficheiro');
+      await pickAndImportDocument();
     } finally {
       setBusy(false);
     }
-  }
-
-  async function handleUploadDocument() {
-    if (busy) return;
-    const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'] });
-    if (result.canceled || !result.assets?.[0]) return;
-    await processPickedAsset(result.assets[0]);
   }
 
   function handleLogout() {
@@ -193,6 +186,7 @@ export default function CameraScreen() {
         <View style={styles.topBarRightGroup}>
           <Pressable style={styles.iconButton} onPress={() => router.push('/pending')}>
             <Ionicons name="mail-unread-outline" size={20} color="#fff" />
+            <PendingCountBadge count={pendingCount} />
           </Pressable>
           <Pressable style={styles.iconButton} onPress={() => router.push('/expenses')}>
             <Ionicons name="receipt-outline" size={20} color="#fff" />

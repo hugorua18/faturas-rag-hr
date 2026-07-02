@@ -1,19 +1,59 @@
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useFocusEffect } from 'expo-router';
 import type { AcquirerNifSummary } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
-import { listAcquirerNifSummaries } from '@/api/client';
+import { usePendingCount } from '@/hooks/use-pending-count';
+import { listAcquirerNifSummaries, logout } from '@/api/client';
 import { formatCurrency, formatNifLabel } from '@/utils/format';
+import { pickAndImportDocument } from '@/utils/import-document';
+import { confirmAction } from '@/utils/alert';
+import { PendingCountBadge } from '@/components/pending-count-badge';
 
 export default function AcquirerNifListScreen() {
   const theme = useTheme();
+  const pendingCount = usePendingCount();
   const [summaries, setSummaries] = useState<AcquirerNifSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  function handleAdd() {
+    if (Platform.OS === 'web') {
+      // Na Web este ecrã é a "casa" — o "+" pergunta se é ficheiro ou foto.
+      setAddMenuOpen(true);
+    } else {
+      // No iOS/Android a câmara é o ecrã inicial — o "+" volta lá.
+      router.push('/');
+    }
+  }
+
+  async function handleImportFile() {
+    if (importing) return;
+    setImporting(true);
+    try {
+      const navigated = await pickAndImportDocument();
+      if (navigated) setAddMenuOpen(false);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function handleTakePhoto() {
+    setAddMenuOpen(false);
+    // /?camera=1 fura o redirect Web→/expenses do index e abre mesmo a câmara.
+    router.push({ pathname: '/', params: { camera: '1' } });
+  }
+
+  function handleLogout() {
+    confirmAction('Terminar sessão', 'Tens a certeza que queres sair da tua conta?', 'Terminar sessão', () => {
+      logout();
+    });
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -42,12 +82,54 @@ export default function AcquirerNifListScreen() {
       <Stack.Screen
         options={{
           headerRight: () => (
-            <Pressable onPress={() => router.push('/')} hitSlop={12}>
-              <Ionicons name="add-circle" size={28} color={theme.accent} />
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable onPress={() => router.push('/pending')} hitSlop={8}>
+                <Ionicons name="mail-unread-outline" size={24} color={theme.accent} />
+                <PendingCountBadge count={pendingCount} />
+              </Pressable>
+              <Pressable onPress={handleAdd} hitSlop={8}>
+                <Ionicons name="add-circle" size={28} color={theme.accent} />
+              </Pressable>
+              <Pressable onPress={handleLogout} hitSlop={8}>
+                <Ionicons name="log-out-outline" size={24} color={theme.accent} />
+              </Pressable>
+            </View>
           ),
         }}
       />
+
+      <Modal visible={addMenuOpen} transparent animationType="fade" onRequestClose={() => setAddMenuOpen(false)}>
+        <Pressable style={styles.menuOverlay} onPress={() => setAddMenuOpen(false)}>
+          <Pressable style={[styles.menuCard, { backgroundColor: theme.card }]} onPress={() => {}}>
+            <Text style={[styles.menuTitle, { color: theme.text }]}>Adicionar fatura</Text>
+            <Pressable
+              style={[styles.menuOption, { backgroundColor: theme.backgroundElement }]}
+              onPress={handleImportFile}
+              disabled={importing}
+            >
+              {importing ? (
+                <ActivityIndicator color={theme.accent} />
+              ) : (
+                <Ionicons name="document-attach-outline" size={20} color={theme.accent} />
+              )}
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>
+                {importing ? 'A processar…' : 'Adicionar ficheiro'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.menuOption, { backgroundColor: theme.backgroundElement }]}
+              onPress={handleTakePhoto}
+              disabled={importing}
+            >
+              <Ionicons name="camera-outline" size={20} color={theme.accent} />
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>Tirar foto</Text>
+            </Pressable>
+            <Pressable style={styles.menuCancel} onPress={() => setAddMenuOpen(false)} disabled={importing}>
+              <Text style={[styles.menuCancelText, { color: theme.accent }]}>Cancelar</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
       {loading && <ActivityIndicator style={styles.spinner} />}
       {error && (
         <View style={styles.errorBox}>
@@ -118,4 +200,25 @@ const styles = StyleSheet.create({
   rowSubtitle: { fontSize: 13 },
   rowTrailing: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   rowAmount: { fontSize: 15, fontWeight: '600' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  menuCard: { width: '100%', maxWidth: 360, borderRadius: 16, padding: 16, gap: 10 },
+  menuTitle: { fontSize: 17, fontWeight: '700', textAlign: 'center', marginBottom: 4 },
+  menuOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+  },
+  menuOptionText: { fontSize: 15.5, fontWeight: '500' },
+  menuCancel: { alignItems: 'center', paddingVertical: 10 },
+  menuCancelText: { fontSize: 15.5, fontWeight: '600' },
 });

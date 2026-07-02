@@ -58,14 +58,18 @@ export default function LoginScreen() {
       // access_type=offline é obrigatório para o Google alguma vez devolver um
       // refresh_token — sem isto NENHUM login (nem o primeiro) recebe um, e o
       // arquivo no Drive (Fase 8) falha sempre em silêncio ("Utilizador sem
-      // refresh token do Google Sign-In"). prompt=consent força sempre o ecrã
-      // de consentimento, para contas que já autorizaram a app antes deste fix
-      // (sem refresh_token guardado) também conseguirem obter um novo.
+      // refresh token do Google Sign-In"). O refresh_token só vem no ecrã de
+      // consentimento, que o Google mostra automaticamente na primeira
+      // autorização de cada conta — não forçamos prompt=consent em todos os
+      // logins porque isso acrescentava dois ecrãs ("signing back in" +
+      // "already has some access") a cada sessão. Se o token guardado se
+      // perder, remover o acesso da app em myaccount.google.com/connections
+      // força novo consentimento (e novo token) no login seguinte.
       // select_account força o seletor de contas: sem ele, no iOS (onde o
       // browser de autenticação partilha a sessão Google do Safari) o Google
       // escolhe silenciosamente a conta já autenticada, sem dar hipótese de
       // usar outra conta (ex: faturas.rag.hr em vez da conta pessoal).
-      extraParams: { access_type: 'offline', prompt: 'select_account consent' },
+      extraParams: { access_type: 'offline', prompt: 'select_account' },
     },
     discovery,
   );
