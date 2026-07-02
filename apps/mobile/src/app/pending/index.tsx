@@ -76,8 +76,8 @@ export default function PendingReviewListScreen() {
               style={[styles.row, { backgroundColor: theme.card }]}
               onPress={() => router.push(`/expense/${item.id}`)}
             >
-              {item.originalFilePath ? (
-                <Image source={{ uri: resolveFileUrl(item.originalFilePath) }} style={styles.thumb} />
+              {item.fileUrl ? (
+                <Image source={{ uri: resolveFileUrl(item.fileUrl) }} style={styles.thumb} />
               ) : (
                 <View style={[styles.thumb, styles.thumbPlaceholder, { backgroundColor: theme.backgroundElement }]}>
                   <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? 'document-outline'} size={20} color={theme.textSecondary} />

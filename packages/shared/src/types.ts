@@ -58,6 +58,10 @@ export interface Expense extends ExpenseInput {
   status: ExpenseStatus;
   /** Caminho relativo (Fase 0, disco local) ou, a partir da Fase 1, referência no Drive. */
   originalFilePath?: string;
+  /** URL assinada de curta duração (~15min) para ver/descarregar originalFilePath — usar
+   * esta em vez de construir a URL a partir de originalFilePath diretamente, que já não
+   * é servido sem autenticação. Pode ser null se não houver ficheiro. */
+  fileUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }

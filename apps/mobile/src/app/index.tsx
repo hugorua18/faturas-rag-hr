@@ -10,8 +10,8 @@ import { parseInvoiceQr } from '@invoice-scanner/shared';
 
 import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
-import { extractDocument, resolveFileUrl } from '@/api/client';
-import { notify } from '@/utils/alert';
+import { extractDocument, logout, resolveFileUrl } from '@/api/client';
+import { notify, confirmAction } from '@/utils/alert';
 
 const FRAME_SIZE = 260;
 const CORNER_LENGTH = 32;
@@ -90,13 +90,13 @@ export default function CameraScreen() {
   async function processPickedAsset(asset: { uri: string; name: string; mimeType?: string | null }) {
     setBusy(true);
     try {
-      const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileMimeType } = await extractDocument({
+      const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileUrl, fileMimeType } = await extractDocument({
         uri: asset.uri,
         name: asset.name,
         mimeType: asset.mimeType ?? 'application/octet-stream',
       });
       setPendingCapture({
-        fileUri: resolveFileUrl(originalFilePath),
+        fileUri: fileUrl ? resolveFileUrl(fileUrl) : asset.uri,
         fileMimeType,
         parsedQr,
         qrRawPayload: qrRawPayload ?? undefined,
@@ -116,6 +116,12 @@ export default function CameraScreen() {
     const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'] });
     if (result.canceled || !result.assets?.[0]) return;
     await processPickedAsset(result.assets[0]);
+  }
+
+  function handleLogout() {
+    confirmAction('Terminar sessão', 'Tens a certeza que queres sair da tua conta?', 'Terminar sessão', () => {
+      logout();
+    });
   }
 
   const handleBarcodeScanned = useCallback(
@@ -185,6 +191,9 @@ export default function CameraScreen() {
           </Pressable>
           <Pressable style={styles.iconButton} onPress={() => router.push('/expenses')}>
             <Ionicons name="receipt-outline" size={20} color="#fff" />
+          </Pressable>
+          <Pressable style={styles.iconButton} onPress={handleLogout}>
+            <Ionicons name="log-out-outline" size={20} color="#fff" />
           </Pressable>
         </View>
       </View>

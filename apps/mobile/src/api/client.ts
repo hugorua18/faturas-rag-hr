@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { router } from 'expo-router';
 import type {
   AcquirerNifSummary,
   DuplicateExpenseResponse,
@@ -10,7 +11,7 @@ import type {
   ReportStatus,
 } from '@invoice-scanner/shared';
 import { API_BASE_URL } from './config';
-import { getSessionToken } from '@/state/session';
+import { clearSessionToken, getSessionToken } from '@/state/session';
 
 export interface CapturedFile {
   uri: string;
@@ -27,7 +28,14 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const token = await getSessionToken();
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  // Sessão expirada (30 dias) ou revogada no servidor — sem isto, os ecrãs
+  // ficavam presos a receber 401 para sempre, sem forma de voltar a autenticar.
+  if (response.status === 401 && token) {
+    await clearSessionToken();
+    router.replace('/login');
+  }
+  return response;
 }
 
 export class DuplicateExpenseError extends Error {
@@ -116,6 +124,8 @@ export interface ExtractedDocument {
   qrRawPayload: string | null;
   ocrFields: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
   originalFilePath: string;
+  /** URL assinada de curta duração — usar para pré-visualização (resolveFileUrl), nunca originalFilePath diretamente. */
+  fileUrl: string | null;
   fileMimeType: string;
 }
 
@@ -173,8 +183,11 @@ export async function listMonthlySummaries(acquirerNif: string): Promise<Monthly
   return response.json();
 }
 
-export function resolveFileUrl(originalFilePath: string): string {
-  return `${API_BASE_URL}/${originalFilePath}`;
+// Recebe SEMPRE um fileUrl (já assinado pelo servidor), nunca originalFilePath
+// diretamente — /uploads deixou de ser servido sem autenticação, ver
+// apps/server/src/utils/uploads-path.ts.
+export function resolveFileUrl(fileUrl: string): string {
+  return `${API_BASE_URL}/${fileUrl}`;
 }
 
 export async function updateReportStatus(
@@ -217,4 +230,13 @@ export function getReportRangeExcelUrl(acquirerNif: string, from: string, to: st
   const params = new URLSearchParams({ from, to });
   if (label) params.set('label', label);
   return `${API_BASE_URL}/reports/${encodeURIComponent(acquirerNif)}/xlsx?${params.toString()}`;
+}
+
+// Termina a sessão no servidor (invalida o Session row) e limpa o token local
+// — sem isto não havia forma de terminar sessão a partir da app (ver
+// clearSessionToken em state/session.ts, que ficava por chamar).
+export async function logout(): Promise<void> {
+  await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined);
+  await clearSessionToken();
+  router.replace('/login');
 }

@@ -7,7 +7,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@invoice-scanner/shared": "workspace:*",

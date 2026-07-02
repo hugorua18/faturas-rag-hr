@@ -8,9 +8,23 @@ import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
 import { uploadInvoiceToDrive } from '../services/drive.service';
+import { uploadsDir, resolveSafeUploadPath, signUploadPath } from '../utils/uploads-path';
 
-const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
+
+// Só imagens/PDF podem ser gravados em uploads/ — sem isto, POST /expenses
+// aceitava qualquer ficheiro (ex: .html) que depois era servido de volta sem
+// autenticação em /uploads, permitindo alojar conteúdo arbitrário na origem do
+// servidor. Erro (em vez de rejeição silenciosa) para o cliente saber que o
+// upload falhou, em vez de a despesa ficar silenciosamente sem imagem.
+const ALLOWED_UPLOAD_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'application/pdf']);
+function uploadFileFilter(_req: unknown, file: Express.Multer.File, cb: multer.FileFilterCallback): void {
+  if (ALLOWED_UPLOAD_MIME_TYPES.has(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Tipo de ficheiro não suportado — só são aceites imagens ou PDF'));
+  }
+}
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
@@ -19,7 +33,14 @@ const storage = multer.diskStorage({
     cb(null, `${crypto.randomUUID()}${ext}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage, fileFilter: uploadFileFilter, limits: { fileSize: 20 * 1024 * 1024 } });
+
+// Anexa fileUrl (URL assinada de curta duração para a imagem/PDF original) à
+// resposta JSON de uma despesa — nunca expor originalFilePath diretamente
+// como URL, ver utils/uploads-path.ts.
+function toExpenseJson<T extends { originalFilePath: string | null }>(expense: T): T & { fileUrl: string | null } {
+  return { ...expense, fileUrl: signUploadPath(expense.originalFilePath) };
+}
 
 const VALID_SOURCES = ['CAMERA', 'EMAIL', 'UPLOAD'];
 
@@ -36,8 +57,8 @@ function nifFilterValue(nifParam: string): string | null {
 }
 
 function deleteUploadedFile(originalFilePath: string | null | undefined): void {
-  if (!originalFilePath) return;
-  const absolutePath = path.join(uploadsDir, '..', originalFilePath);
+  const absolutePath = resolveSafeUploadPath(originalFilePath);
+  if (!absolutePath) return;
   fs.rm(absolutePath, { force: true }, () => {
     // Falha a apagar o ficheiro não deve impedir a operação na BD (ex: já não existe).
   });
@@ -57,8 +78,8 @@ function archiveInvoiceToDriveBestEffort(
   user: User,
   expense: { id: string; documentDate: string | null; originalFilePath: string | null },
 ): void {
-  if (!expense.originalFilePath) return;
-  const absolutePath = path.join(uploadsDir, '..', expense.originalFilePath);
+  const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+  if (!absolutePath) return;
   void (async () => {
     try {
       const fileBuffer = fs.readFileSync(absolutePath);
@@ -84,7 +105,7 @@ expensesRouter.get('/', async (req, res) => {
     where.documentDate = { startsWith: period };
   }
   const expenses = await prisma.expense.findMany({ where, orderBy: { documentDate: 'desc' } });
-  res.json(expenses);
+  res.json(expenses.map(toExpenseJson));
 });
 
 // Extrai o QR (e guarda uma imagem apresentável) de um PDF/imagem escolhido pelo
@@ -104,7 +125,15 @@ expensesRouter.post('/extract', upload.single('file'), async (req, res) => {
     const filename = `${crypto.randomUUID()}${ext}`;
     fs.writeFileSync(path.join(uploadsDir, filename), imageBuffer);
 
-    res.json({ parsedQr, qrRawPayload: qrText, ocrFields, originalFilePath: `uploads/${filename}`, fileMimeType: imageMimeType });
+    const extractedFilePath = `uploads/${filename}`;
+    res.json({
+      parsedQr,
+      qrRawPayload: qrText,
+      ocrFields,
+      originalFilePath: extractedFilePath,
+      fileUrl: signUploadPath(extractedFilePath),
+      fileMimeType: imageMimeType,
+    });
   } catch (err) {
     deleteUploadedFile(`uploads/${req.file.filename}`);
     res.status(400).json({ error: err instanceof Error ? err.message : 'Falha ao processar o ficheiro' });
@@ -176,7 +205,7 @@ expensesRouter.get('/:id', async (req, res) => {
     res.status(404).json({ error: 'Despesa não encontrada' });
     return;
   }
-  res.json(expense);
+  res.json(toExpenseJson(expense));
 });
 
 expensesRouter.post('/', upload.single('file'), async (req, res) => {
@@ -193,6 +222,14 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
   }
   if (body.currency && !isCurrencyCode(body.currency)) {
     res.status(400).json({ error: 'Moeda inválida' });
+    return;
+  }
+  // existingFilePath vem do cliente (referência a um ficheiro já gravado por
+  // /expenses/extract) — tem de corresponder exatamente ao formato gerado pelo
+  // servidor, senão um valor como "../../../.env" permitiria ler/apagar
+  // ficheiros arbitrários mais abaixo (deleteUploadedFile/arquivo no Drive).
+  if (!req.file && body.existingFilePath && !resolveSafeUploadPath(body.existingFilePath)) {
+    res.status(400).json({ error: 'Caminho de ficheiro inválido' });
     return;
   }
 
@@ -252,7 +289,7 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
 
   archiveInvoiceToDriveBestEffort(req.user!, expense);
 
-  res.status(201).json(expense);
+  res.status(201).json(toExpenseJson(expense));
 });
 
 expensesRouter.patch('/:id', async (req, res) => {
@@ -298,7 +335,7 @@ expensesRouter.patch('/:id', async (req, res) => {
         originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
       },
     });
-    res.json(expense);
+    res.json(toExpenseJson(expense));
   } catch {
     res.status(404).json({ error: 'Despesa não encontrada' });
   }

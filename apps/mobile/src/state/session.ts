@@ -8,7 +8,11 @@ import * as SecureStore from 'expo-secure-store';
 // Na Web, o binding nativo do expo-secure-store (Keychain/Keystore) não existe —
 // a implementação web desta versão do SDK rebenta ao ser chamada diretamente
 // ("getValueWithKeyAsync is not a function"), por isso usamos localStorage como
-// alternativa nesse caso (só afeta o preview de browser/dev, não builds nativos).
+// alternativa nesse caso. NOTA: a app web está publicada em produção
+// (invoice-scanner.expo.app), não é só um preview de dev — localStorage é
+// legível por qualquer script na mesma origem (XSS), o que é um risco real
+// para este token de 30 dias. Se isto vier a importar mais (ex: mais tráfego
+// web real), migrar para cookies httpOnly/Secure geridos pelo servidor.
 const SESSION_TOKEN_KEY = 'session_token';
 
 let cachedToken: string | null | undefined; // undefined = ainda não lido do storage

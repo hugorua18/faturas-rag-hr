@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import pdfMake from 'pdfmake';
 import type { Content } from 'pdfmake/interfaces';
 import { EXPENSE_TYPE_LABELS, REPORT_STATUS_LABELS, type ExpenseType, type ReportStatus } from '@invoice-scanner/shared';
+import { resolveSafeUploadPath } from '../utils/uploads-path';
 
 export interface ExpenseForReport {
   type: ExpenseType;
@@ -18,8 +18,6 @@ export interface ExpenseForReport {
 
 pdfMake.setFonts({ Helvetica: require('pdfmake/standard-fonts/Helvetica').Helvetica });
 
-const uploadsRoot = path.join(__dirname, '..', '..');
-
 function isJpeg(buffer: Buffer): boolean {
   return buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
 }
@@ -32,9 +30,9 @@ function isPng(buffer: Buffer): boolean {
 // de imagem válido — o pdfmake só deteta isto ao gerar o documento e aborta o PDF
 // inteiro, por isso validamos aqui e tratamos como "sem imagem" em vez de rebentar.
 function readImageAsDataUrl(originalFilePath: string | null): string | undefined {
-  if (!originalFilePath) return undefined;
+  const absolutePath = resolveSafeUploadPath(originalFilePath);
+  if (!absolutePath) return undefined;
   try {
-    const absolutePath = path.join(uploadsRoot, originalFilePath);
     const buffer = fs.readFileSync(absolutePath);
     if (isPng(buffer)) return `data:image/png;base64,${buffer.toString('base64')}`;
     if (isJpeg(buffer)) return `data:image/jpeg;base64,${buffer.toString('base64')}`;

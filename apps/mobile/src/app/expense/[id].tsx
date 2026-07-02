@@ -222,9 +222,9 @@ export default function ExpenseDetailScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        {expense.originalFilePath && (
+        {expense.fileUrl && (
           <Pressable onPress={() => setPreviewVisible(true)}>
-            <Image source={{ uri: resolveFileUrl(expense.originalFilePath) }} style={styles.preview} resizeMode="cover" />
+            <Image source={{ uri: resolveFileUrl(expense.fileUrl) }} style={styles.preview} resizeMode="cover" />
             <View style={styles.previewBadge}>
               <Ionicons name="expand-outline" size={14} color="#fff" />
             </View>
@@ -349,10 +349,10 @@ export default function ExpenseDetailScreen() {
         </Pressable>
       </ScrollView>
 
-      {expense.originalFilePath && (
+      {expense.fileUrl && (
         <PhotoLightbox
           visible={previewVisible}
-          uri={resolveFileUrl(expense.originalFilePath)}
+          uri={resolveFileUrl(expense.fileUrl)}
           onClose={() => setPreviewVisible(false)}
         />
       )}
