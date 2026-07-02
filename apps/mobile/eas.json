@@ -17,7 +17,9 @@
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://invoice-scanner-server.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://invoice-scanner-server.onrender.com",
+        "EXPO_PUBLIC_GOOGLE_SIGNIN_CLIENT_ID_WEB": "204121416132-hu0gqmbfto0c3s5g4io7jq63k7khklao.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_SIGNIN_CLIENT_ID_IOS": "204121416132-im7f3lm1rssfdqjo7oa27al5mcgb67cq.apps.googleusercontent.com"
       }
     }
   },
