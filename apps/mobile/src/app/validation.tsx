@@ -15,6 +15,7 @@ import * as Haptics from 'expo-haptics';
 import { type ExpenseType, type ExpenseInput } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
 import { webMaxWidthStyle } from '@/constants/theme';
 import { createExpense, DuplicateExpenseError } from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
@@ -47,6 +48,11 @@ export default function ValidationScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  // O QR das faturas PT traz o NIF do prestador mas nunca o nome — tenta
+  // preenchê-lo automaticamente (histórico → VIES) sem sobrepor o que o
+  // utilizador escrever.
+  useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
 
   useEffect(() => {
     const pending = takePendingCapture();

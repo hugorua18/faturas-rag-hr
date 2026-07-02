@@ -119,6 +119,14 @@ export async function listExpenses(filter?: {
   return response.json();
 }
 
+// Nome do prestador a partir do NIF: histórico do próprio utilizador primeiro,
+// depois o registo oficial de IVA da UE (VIES). name=null quando desconhecido.
+export async function lookupSupplierName(nif: string): Promise<{ name: string | null; source: string | null }> {
+  const response = await apiFetch(`/suppliers/lookup?nif=${encodeURIComponent(nif)}`);
+  if (!response.ok) throw new Error('Falha ao procurar o NIF');
+  return response.json();
+}
+
 export interface ExtractedDocument {
   parsedQr: ParsedInvoiceQr | null;
   qrRawPayload: string | null;

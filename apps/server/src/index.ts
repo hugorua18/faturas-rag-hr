@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { expensesRouter } from './routes/expenses';
 import { reportsRouter } from './routes/reports';
+import { suppliersRouter } from './routes/suppliers';
 import { authRouter } from './routes/auth';
 import { requireAuth } from './middleware/require-auth';
 import { startGmailPolling } from './services/gmail-poller.service';
@@ -63,6 +64,7 @@ app.get('/health', async (_req, res) => {
 app.use('/auth', authRouter);
 app.use('/expenses', requireAuth, expensesRouter);
 app.use('/reports', requireAuth, reportsRouter);
+app.use('/suppliers', requireAuth, suppliersRouter);
 
 // Apanha erros do multer (ex: fileFilter a rejeitar um tipo de ficheiro não
 // suportado) e do CORS, devolvendo um JSON limpo em vez do handler por

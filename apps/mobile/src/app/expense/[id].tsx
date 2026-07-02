@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Expense, ExpenseType } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
 import { webMaxWidthStyle } from '@/constants/theme';
 import { deleteExpense, getExpense, resolveFileUrl, updateExpense } from '@/api/client';
 import {
@@ -58,6 +59,11 @@ export default function ExpenseDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(false);
+
+  // Sobretudo útil na revisão de faturas chegadas por email (fila "Tratamento
+  // manual"), onde o nome vem quase sempre vazio — preenche a partir do NIF
+  // (histórico → VIES) sem sobrepor edições do utilizador.
+  useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
 
   const loadExpense = useCallback(() => {
     if (!id) return;
