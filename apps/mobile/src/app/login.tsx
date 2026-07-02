@@ -62,6 +62,15 @@ export default function LoginScreen() {
       completeLogin(response.params.code, request?.codeVerifier);
     } else if (response.type === 'error') {
       setError('Falha na autenticação com o Google');
+    } else if (response.type === 'dismiss' || response.type === 'cancel') {
+      // Na Web, o Chrome pode bloquear silenciosamente o popup do Google (sem
+      // lançar erro) quando o clique não é reconhecido como gesto genuíno do
+      // utilizador — o expo-auth-session interpreta isso como "dismiss" sem
+      // qualquer feedback visual por omissão. Mostrar sempre uma mensagem aqui
+      // evita que o botão pareça simplesmente não fazer nada.
+      setError('Sessão de autenticação fechada antes de terminar. Verifica se o browser bloqueou o popup e tenta novamente.');
+    } else if (response.type === 'locked') {
+      setError('Já existe um pedido de autenticação em curso. Aguarda uns segundos e tenta novamente.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [response]);
