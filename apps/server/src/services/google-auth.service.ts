@@ -5,9 +5,13 @@ import { OAuth2Client } from 'google-auth-library';
 // fluxo OAuth do poller do Gmail (gmail-poller.service.ts / get-gmail-refresh-token.ts),
 // que usa GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN para uma caixa de
 // correio de ingestão dedicada. Este serviço usa variáveis de ambiente distintas.
-const GOOGLE_SIGNIN_CLIENT_ID = process.env.GOOGLE_SIGNIN_CLIENT_ID;
-const GOOGLE_SIGNIN_CLIENT_SECRET = process.env.GOOGLE_SIGNIN_CLIENT_SECRET;
-const GOOGLE_SIGNIN_IOS_CLIENT_ID = process.env.GOOGLE_SIGNIN_IOS_CLIENT_ID;
+// .trim(): valores colados no dashboard do Render podem trazer espaços/newlines
+// invisíveis — para o client id iOS isso fazia a comparação exata em
+// getOAuth2ClientForExchange falhar em silêncio e a troca do code cair no
+// cliente Web errado (Google responde "unauthorized_client").
+const GOOGLE_SIGNIN_CLIENT_ID = process.env.GOOGLE_SIGNIN_CLIENT_ID?.trim();
+const GOOGLE_SIGNIN_CLIENT_SECRET = process.env.GOOGLE_SIGNIN_CLIENT_SECRET?.trim();
+const GOOGLE_SIGNIN_IOS_CLIENT_ID = process.env.GOOGLE_SIGNIN_IOS_CLIENT_ID?.trim();
 
 function getOAuth2Client(redirectUri?: string): OAuth2Client {
   if (!GOOGLE_SIGNIN_CLIENT_ID || !GOOGLE_SIGNIN_CLIENT_SECRET) {
@@ -25,6 +29,18 @@ function getOAuth2Client(redirectUri?: string): OAuth2Client {
 function getOAuth2ClientForExchange(redirectUri: string, clientId: string | undefined): OAuth2Client {
   if (clientId && clientId === GOOGLE_SIGNIN_IOS_CLIENT_ID) {
     return new OAuth2Client(GOOGLE_SIGNIN_IOS_CLIENT_ID, undefined, redirectUri);
+  }
+  // Trocar um code emitido para outro cliente falha no Google com um
+  // "unauthorized_client" opaco — este aviso torna o desalinhamento entre o
+  // clientId enviado pela app e os configurados no servidor imediatamente
+  // visível nos logs (client ids são públicos, não são segredos).
+  if (clientId && clientId !== GOOGLE_SIGNIN_CLIENT_ID) {
+    console.warn(
+      `[auth] clientId enviado pela app (${clientId}) não corresponde a nenhum configurado no servidor ` +
+        `(web: ${GOOGLE_SIGNIN_CLIENT_ID ?? 'não definido'}, ios: ${GOOGLE_SIGNIN_IOS_CLIENT_ID ?? 'não definido'}) ` +
+        '— a troca do code vai usar o cliente Web e deve falhar com unauthorized_client. ' +
+        'Verifica a variável GOOGLE_SIGNIN_IOS_CLIENT_ID no Render.',
+    );
   }
   return getOAuth2Client(redirectUri);
 }
