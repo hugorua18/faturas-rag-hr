@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { EXPENSE_TYPE_LABELS, type Expense, type ExpenseType } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { webMaxWidthStyle } from '@/constants/theme';
 import { listExpenses, resolveFileUrl } from '@/api/client';
 import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
 import { formatCurrency } from '@/utils/format';
@@ -45,7 +46,7 @@ export default function PendingReviewListScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.groupedBackground }]}>
-      {loading && <ActivityIndicator style={styles.spinner} />}
+      {loading && <ActivityIndicator style={styles.spinner} color={theme.textSecondary} />}
       {error && (
         <View style={styles.errorBox}>
           <Ionicons name="cloud-offline-outline" size={28} color={theme.destructive} />
@@ -59,7 +60,7 @@ export default function PendingReviewListScreen() {
         style={styles.list}
         data={expenses}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, webMaxWidthStyle]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         ListEmptyComponent={
           !loading && !error ? (
@@ -73,7 +74,7 @@ export default function PendingReviewListScreen() {
           const type = item.type as ExpenseType;
           return (
             <Pressable
-              style={[styles.row, { backgroundColor: theme.card }]}
+              style={[styles.row, { backgroundColor: theme.card }, Platform.OS === 'web' && { cursor: 'pointer' }]}
               onPress={() => router.push(`/expense/${item.id}`)}
             >
               {item.fileUrl ? (

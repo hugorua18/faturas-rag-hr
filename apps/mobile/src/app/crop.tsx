@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,6 +15,7 @@ import Svg, { Polygon } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, Stack } from 'expo-router';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import * as Haptics from 'expo-haptics';
 
 import { useTheme } from '@/hooks/use-theme';
 import { takePendingCapture, setPendingCapture, type PendingCapture } from '@/state/pending-capture';
@@ -117,6 +119,7 @@ export default function CropScreen() {
 
   async function handleConfirm() {
     if (!points || !imageRect || processing) return;
+    if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setProcessing(true);
     try {
       const minX = Math.min(...points.map((p) => p.x));
@@ -290,7 +293,7 @@ const styles = StyleSheet.create({
     borderColor: '#fff',
   },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 16, paddingHorizontal: 24, width: '100%' },
-  secondaryButton: { paddingVertical: 14 },
+  secondaryButton: { paddingVertical: 14, paddingHorizontal: 16, minHeight: 44, justifyContent: 'center' },
   secondaryButtonText: { fontSize: 14, fontWeight: '500' },
   primaryButton: { paddingVertical: 14, paddingHorizontal: 28, borderRadius: 14, alignItems: 'center' },
   primaryButtonFlex: { flex: 1, paddingVertical: 14, borderRadius: 14, alignItems: 'center' },

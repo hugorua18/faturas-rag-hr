@@ -149,7 +149,12 @@ export default function CameraScreen() {
 
   if (!permission.granted) {
     return (
-      <View style={[styles.center, { backgroundColor: theme.background }]}>
+      <View
+        style={[
+          styles.center,
+          { backgroundColor: theme.background, paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
         <Stack.Screen options={{ headerShown: false }} />
         <View style={[styles.permissionIconWrap, { backgroundColor: theme.backgroundElement }]}>
           <Ionicons name="camera-outline" size={40} color={theme.accent} />

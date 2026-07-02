@@ -11,9 +11,11 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 import { type ExpenseType, type ExpenseInput } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { webMaxWidthStyle } from '@/constants/theme';
 import { createExpense, DuplicateExpenseError } from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
 import {
@@ -89,20 +91,28 @@ export default function ValidationScreen() {
     );
   }
 
+  function hapticError() {
+    if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  }
+
   async function submitExpense(replaceExpenseId?: string) {
     if (!type) {
+      hapticError();
       setError('Escolhe o tipo de despesa.');
       return;
     }
     if (currency !== 'EUR' && !/^[A-Z]{3}$/.test(currency)) {
+      hapticError();
       setError('Indica um código de moeda válido (3 letras, ex: JPY).');
       return;
     }
     const conversion = currency !== 'EUR' ? convertToEur(amountBase, amountVat, amountTotal, amountTotalEur) : null;
     if (currency !== 'EUR' && !conversion) {
+      hapticError();
       setError('Preenche o total em Euro para converter esta despesa.');
       return;
     }
+    if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     setError(null);
     try {
@@ -132,10 +142,12 @@ export default function ValidationScreen() {
           ? { uri: capture.fileUri, name: `fatura.${capture.fileMimeType.split('/')[1] ?? 'jpg'}`, mimeType: capture.fileMimeType }
           : undefined;
       await createExpense(input, file, replaceExpenseId, capture?.existingFilePath);
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/expenses');
     } catch (err) {
       if (err instanceof DuplicateExpenseError) {
         setSubmitting(false);
+        hapticError();
         confirmAction(
           'Documento já existe',
           'Já submeteste uma despesa deste fornecedor com o mesmo número de documento. Queres substituir a despesa existente por esta?',
@@ -144,6 +156,7 @@ export default function ValidationScreen() {
         );
         return;
       }
+      hapticError();
       setError(err instanceof Error ? err.message : 'Falha ao submeter a despesa.');
     } finally {
       setSubmitting(false);
@@ -167,7 +180,7 @@ export default function ValidationScreen() {
       />
       <ScrollView
         style={{ backgroundColor: theme.groupedBackground }}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, webMaxWidthStyle]}
         keyboardShouldPersistTaps="handled"
       >
         <Pressable onPress={() => setPreviewVisible(true)}>

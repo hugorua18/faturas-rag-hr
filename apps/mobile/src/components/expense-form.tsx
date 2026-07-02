@@ -152,9 +152,10 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 9,
+    minHeight: 44,
     borderRadius: 18,
   },
   chipText: { fontSize: 13.5, fontWeight: '500' },

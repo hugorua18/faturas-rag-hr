@@ -21,6 +21,7 @@ export const Colors = {
     separator: '#E5E5EA',
     destructive: '#FF3B30',
     success: '#34C759',
+    warning: '#FF9500',
   },
   dark: {
     text: '#ffffff',
@@ -34,6 +35,7 @@ export const Colors = {
     separator: '#38383A',
     destructive: '#FF453A',
     success: '#30D158',
+    warning: '#FF9F0A',
   },
 } as const;
 
@@ -76,3 +78,13 @@ export const Spacing = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+// Ecrãs de conteúdo (formulários, listas) esticavam de ponta a ponta numa
+// janela larga no browser — a app agora tem um deploy Web real (EAS Hosting),
+// não só um preview de dev, por isso isto deixou de ser um detalhe cosmético.
+// Aplicar ao contentContainerStyle de ScrollView/FlatList (não ao ecrã da
+// câmara, que é propositadamente full-bleed).
+export const webMaxWidthStyle = Platform.select({
+  web: { maxWidth: MaxContentWidth, alignSelf: 'center' as const, width: '100%' as const },
+  default: {},
+});

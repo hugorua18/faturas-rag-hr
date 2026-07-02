@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '@/hooks/use-theme';
+import { MaxContentWidth } from '@/constants/theme';
 import { API_BASE_URL, GOOGLE_SIGNIN_CLIENT_ID_IOS, GOOGLE_SIGNIN_CLIENT_ID_WEB } from '@/api/config';
 import { setSessionToken } from '@/state/session';
 
@@ -24,6 +27,7 @@ function resolveClientId(): string {
 
 export default function LoginScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,8 +74,10 @@ export default function LoginScreen() {
       }
       const body: { sessionToken: string; user: { id: string; email: string } } = await res.json();
       await setSessionToken(body.sessionToken);
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/');
     } catch (err) {
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setError(err instanceof Error ? err.message : 'Falha ao iniciar sessão');
     } finally {
       setSubmitting(false);
@@ -79,25 +85,35 @@ export default function LoginScreen() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.groupedBackground }]}>
-      <Text style={[styles.title, { color: theme.text }]}>Digitalizador de Faturas</Text>
-      <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-        Inicia sessão com a tua conta Google para continuar.
-      </Text>
+    <View
+      style={[
+        styles.container,
+        { backgroundColor: theme.groupedBackground, paddingTop: insets.top, paddingBottom: insets.bottom },
+      ]}
+    >
+      <View style={styles.content}>
+        <Text style={[styles.title, { color: theme.text }]}>Digitalizador de Faturas</Text>
+        <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+          Inicia sessão com a tua conta Google para continuar.
+        </Text>
 
-      <Pressable
-        style={[styles.button, { backgroundColor: theme.accent, opacity: !request || submitting ? 0.6 : 1 }]}
-        disabled={!request || submitting}
-        onPress={() => promptAsync()}
-      >
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Iniciar sessão com o Google</Text>
-        )}
-      </Pressable>
+        <Pressable
+          style={[styles.button, { backgroundColor: theme.accent, opacity: !request || submitting ? 0.6 : 1 }]}
+          disabled={!request || submitting}
+          onPress={() => {
+            if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            promptAsync();
+          }}
+        >
+          {submitting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Iniciar sessão com o Google</Text>
+          )}
+        </Pressable>
 
-      {error ? <Text style={[styles.error, { color: theme.destructive }]}>{error}</Text> : null}
+        {error ? <Text style={[styles.error, { color: theme.destructive }]}>{error}</Text> : null}
+      </View>
     </View>
   );
 }
@@ -107,6 +123,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  content: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    alignItems: 'center',
     paddingHorizontal: 32,
     gap: 12,
   },

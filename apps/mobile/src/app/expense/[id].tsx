@@ -12,9 +12,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Expense, ExpenseType } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { webMaxWidthStyle } from '@/constants/theme';
 import { deleteExpense, getExpense, resolveFileUrl, updateExpense } from '@/api/client';
 import {
   Card,
@@ -35,6 +38,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export default function ExpenseDetailScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [expense, setExpense] = useState<Expense | null | undefined>(undefined);
   const [type, setType] = useState<ExpenseType | null>(null);
@@ -141,7 +145,9 @@ export default function ExpenseDetailScreen() {
       const updated = await updateExpense(id, result.data);
       setExpense(updated);
       setSaved(true);
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setError(err instanceof Error ? err.message : 'Falha ao guardar alterações');
     } finally {
       setSaving(false);
@@ -162,8 +168,10 @@ export default function ExpenseDetailScreen() {
     setError(null);
     try {
       await updateExpense(id, { ...result.data, status: 'SUBMETIDA' });
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
     } catch (err) {
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setError(err instanceof Error ? err.message : 'Falha ao confirmar a despesa');
     } finally {
       setSaving(false);
@@ -173,6 +181,7 @@ export default function ExpenseDetailScreen() {
   function handleDelete() {
     if (!id) return;
     const isPending = expense?.status === 'TRATAMENTO_MANUAL';
+    if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     confirmAction(
       isPending ? 'Descartar despesa' : 'Eliminar despesa',
       isPending
@@ -186,6 +195,7 @@ export default function ExpenseDetailScreen() {
           await deleteExpense(id);
           router.back();
         } catch (err) {
+          if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
           setError(err instanceof Error ? err.message : 'Falha ao eliminar despesa');
           setDeleting(false);
         }
@@ -219,7 +229,7 @@ export default function ExpenseDetailScreen() {
       <Stack.Screen options={{ title: expense.supplierName || 'Despesa' }} />
       <ScrollView
         style={{ backgroundColor: theme.groupedBackground }}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 + insets.bottom }, webMaxWidthStyle]}
         keyboardShouldPersistTaps="handled"
       >
         {expense.fileUrl && (
@@ -232,9 +242,9 @@ export default function ExpenseDetailScreen() {
         )}
 
         {expense.status === 'TRATAMENTO_MANUAL' && (
-          <View style={[styles.pendingBanner, { backgroundColor: '#F5A62320' }]}>
-            <Ionicons name="mail-unread-outline" size={16} color="#F5A623" />
-            <Text style={[styles.pendingBannerText, { color: '#F5A623' }]}>
+          <View style={[styles.pendingBanner, { backgroundColor: `${theme.warning}20` }]}>
+            <Ionicons name="mail-unread-outline" size={16} color={theme.warning} />
+            <Text style={[styles.pendingBannerText, { color: theme.warning }]}>
               Por validar — recebida por {SOURCE_LABELS[expense.source] ?? expense.source}. Confirma os dados abaixo.
             </Text>
           </View>

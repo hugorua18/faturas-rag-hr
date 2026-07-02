@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MonthlySummary } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
+import { webMaxWidthStyle } from '@/constants/theme';
 import {
   getReportExcelUrl,
   getReportPdfUrl,
@@ -25,6 +28,7 @@ interface ReportEntry {
 
 export default function ReportGenerateScreen() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { nif, period } = useLocalSearchParams<{ nif: string; period?: string }>();
   const [months, setMonths] = useState<MonthlySummary[]>([]);
   const [loadingMonths, setLoadingMonths] = useState(true);
@@ -68,6 +72,7 @@ export default function ReportGenerateScreen() {
       setError('Escolhe pelo menos um formato.');
       return;
     }
+    if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setGenerating(true);
     setError(null);
     setReports([]);
@@ -103,7 +108,9 @@ export default function ReportGenerateScreen() {
         results.push({ format: 'xlsx', report });
       }
       setReports(results);
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
+      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setError(err instanceof Error ? err.message : 'Falha ao gerar relatório');
     } finally {
       setGenerating(false);
@@ -130,8 +137,11 @@ export default function ReportGenerateScreen() {
           ),
         }}
       />
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        {loadingMonths && <ActivityIndicator style={{ marginTop: 16 }} />}
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 + insets.bottom }, webMaxWidthStyle]}
+        keyboardShouldPersistTaps="handled"
+      >
+        {loadingMonths && <ActivityIndicator style={{ marginTop: 16 }} color={theme.textSecondary} />}
 
         {!loadingMonths && months.length === 0 && (
           <Text style={[styles.empty, { color: theme.textSecondary }]}>Sem meses disponíveis para este NIF.</Text>
@@ -257,9 +267,10 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 9,
+    minHeight: 44,
     borderRadius: 18,
   },
   chipText: { fontSize: 13.5, fontWeight: '500' },
