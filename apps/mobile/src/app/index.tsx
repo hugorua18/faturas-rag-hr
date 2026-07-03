@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
@@ -69,6 +69,9 @@ function CameraScreen() {
   const theme = useTheme();
   const pendingCount = usePendingCount();
   const [permission, requestPermission] = useCameraPermissions();
+  // Toque no preview = repasse único de focagem (ver comentário no autofocus).
+  const [focusNudge, setFocusNudge] = useState(false);
+  const focusNudgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [busy, setBusy] = useState(false);
   // null = ainda a tentar ler o QR; string = QR lido e confirmado (moldura
   // fica verde), à espera que o utilizador prima o botão de disparo.
@@ -77,6 +80,22 @@ function CameraScreen() {
   const [layout, setLayout] = useState({ width: 0, height: 0 });
   const cameraRef = useRef<CameraView>(null);
   const locked = lockedQrPayload !== null;
+
+  // Repasse manual de focagem ao tocar no preview (à imagem do "tap to focus"
+  // da app Câmara nativa): a transição off→on dispara uma passagem única de
+  // autofocus (.autoFocus) e o regresso a "off" retoma a focagem contínua.
+  function nudgeFocus() {
+    if (Platform.OS === 'web') return;
+    if (focusNudgeTimer.current) clearTimeout(focusNudgeTimer.current);
+    setFocusNudge(true);
+    focusNudgeTimer.current = setTimeout(() => setFocusNudge(false), 600);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (focusNudgeTimer.current) clearTimeout(focusNudgeTimer.current);
+    };
+  }, []);
 
   async function captureAndGo(qrRawPayload: string | null) {
     if (!cameraRef.current || busy) return;
@@ -169,7 +188,14 @@ function CameraScreen() {
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
         facing="back"
-        autofocus="on"
+        // ARMADILHA da API do expo-camera (confirmado no código nativo iOS,
+        // CameraEnums.swift): autofocus="on" = .autoFocus = foca UMA vez e
+        // TRANCA a focagem; autofocus="off" = .continuousAutoFocus = refoca
+        // sempre que a cena muda (comportamento da app Câmara nativa). Com
+        // "on" fixo, a câmara focava ao abrir e nunca mais — faturas a
+        // distâncias diferentes ficavam desfocadas. "on" é usado só como
+        // impulso momentâneo no toque (nudgeFocus).
+        autofocus={focusNudge ? 'on' : 'off'}
         enableTorch={torchOn}
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
         // Desativar por completo o callback (undefined) assim que o QR fica
@@ -178,6 +204,10 @@ function CameraScreen() {
         onBarcodeScanned={locked || busy ? undefined : handleBarcodeScanned}
         onLayout={(event) => setLayout(event.nativeEvent.layout)}
       />
+
+      {/* Camada de toque para refocar — por baixo das barras (irmãos seguintes
+          recebem o toque primeiro), por isso não rouba cliques aos botões. */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={nudgeFocus} />
 
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable style={styles.iconButton} onPress={() => setTorchOn((value) => !value)}>
