@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -17,7 +18,7 @@ import { type ExpenseType, type ExpenseInput } from '@invoice-scanner/shared';
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { createExpense, DuplicateExpenseError } from '@/api/client';
+import { createExpense, DuplicateExpenseError, extractDocument } from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
 import {
   Card,
@@ -28,6 +29,7 @@ import {
   SectionHeader,
 } from '@/components/expense-form';
 import { confirmAction } from '@/utils/alert';
+import { parseDecimal } from '@/utils/number';
 import { convertToEur } from '@/utils/currency-conversion';
 
 export default function ValidationScreen() {
@@ -46,6 +48,7 @@ export default function ValidationScreen() {
   const [currency, setCurrency] = useState('EUR');
   const [amountTotalEur, setAmountTotalEur] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewVisible, setPreviewVisible] = useState(false);
 
@@ -54,29 +57,70 @@ export default function ValidationScreen() {
   // utilizador escrever.
   useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
 
+  // Preenche só campos ainda vazios — nunca sobrepõe o que o utilizador já
+  // escreveu (o OCR chega segundos depois de o ecrã abrir).
+  function fillFromOcr(ocr: NonNullable<PendingCapture['ocrFields']>) {
+    if (ocr.supplierName) setSupplierName((v) => v || ocr.supplierName!);
+    if (ocr.issuerNif) setSupplierNif((v) => v || ocr.issuerNif!);
+    if (ocr.acquirerNif) setAcquirerNif((v) => v || ocr.acquirerNif!);
+    if (ocr.documentId) setDocumentId((v) => v || ocr.documentId!);
+    if (ocr.documentTime) setDocumentTime((v) => v || ocr.documentTime!);
+    if (ocr.documentDate) setDocumentDate((v) => v || ocr.documentDate!);
+    if (ocr.baseAmount != null) setAmountBase((v) => v || ocr.baseAmount!.toFixed(2));
+    if (ocr.vatAmount != null) setAmountVat((v) => v || ocr.vatAmount!.toFixed(2));
+    if (ocr.totalAmount != null) setAmountTotal((v) => v || ocr.totalAmount!.toFixed(2));
+  }
+
+  function fillFromQr(qr: NonNullable<PendingCapture['parsedQr']>) {
+    setSupplierNif((v) => v || qr.issuerNif);
+    setAcquirerNif((v) => v || qr.acquirerNif);
+    setDocumentId((v) => v || qr.documentId);
+    setDocumentDate((v) => v || qr.documentDate);
+    if (qr.baseAmount !== null) setAmountBase((v) => v || qr.baseAmount!.toFixed(2));
+    if (qr.vatAmount !== null) setAmountVat((v) => v || qr.vatAmount!.toFixed(2));
+    if (qr.totalAmount !== null) setAmountTotal((v) => v || qr.totalAmount!.toFixed(2));
+  }
+
   useEffect(() => {
     const pending = takePendingCapture();
     setCapture(pending);
-    const qr = pending?.parsedQr;
-    if (qr) {
-      setSupplierNif(qr.issuerNif);
-      setAcquirerNif(qr.acquirerNif);
-      setDocumentId(qr.documentId);
-      setDocumentDate(qr.documentDate);
-      if (qr.baseAmount !== null) setAmountBase(qr.baseAmount.toFixed(2));
-      if (qr.vatAmount !== null) setAmountVat(qr.vatAmount.toFixed(2));
-      if (qr.totalAmount !== null) setAmountTotal(qr.totalAmount.toFixed(2));
-    } else if (pending?.ocrFields) {
-      // Sem QR: preenchimento parcial e best-effort a partir do OCR — só os
-      // campos que a heurística conseguiu extrair, o resto fica em branco
-      // para o utilizador confirmar/preencher à mão.
-      const ocr = pending.ocrFields;
-      if (ocr.issuerNif !== undefined) setSupplierNif(ocr.issuerNif);
-      if (ocr.documentDate !== undefined) setDocumentDate(ocr.documentDate);
-      if (ocr.baseAmount !== undefined && ocr.baseAmount !== null) setAmountBase(ocr.baseAmount.toFixed(2));
-      if (ocr.vatAmount !== undefined && ocr.vatAmount !== null) setAmountVat(ocr.vatAmount.toFixed(2));
-      if (ocr.totalAmount !== undefined && ocr.totalAmount !== null) setAmountTotal(ocr.totalAmount.toFixed(2));
+    if (!pending) return;
+    if (pending.parsedQr) {
+      fillFromQr(pending.parsedQr);
+    } else if (pending.ocrFields) {
+      fillFromOcr(pending.ocrFields);
+    } else if (!pending.existingFilePath) {
+      // Foto da câmara sem QR lido: envia já a imagem para o servidor, que
+      // tenta primeiro decodificar o QR (jsqr apanha códigos que o scanner ao
+      // vivo perdeu) e recua para OCR. Além de preencher os campos, o ficheiro
+      // fica gravado no servidor (existingFilePath) — o submeter passa a ser
+      // instantâneo porque já não reenvia os bytes da foto.
+      setAnalyzing(true);
+      extractDocument({
+        uri: pending.fileUri,
+        name: `fatura.${pending.fileMimeType.split('/')[1] ?? 'jpg'}`,
+        mimeType: pending.fileMimeType,
+      })
+        .then((extracted) => {
+          setCapture({
+            ...pending,
+            parsedQr: extracted.parsedQr,
+            qrRawPayload: pending.qrRawPayload ?? extracted.qrRawPayload ?? undefined,
+            ocrFields: extracted.ocrFields,
+            existingFilePath: extracted.originalFilePath,
+          });
+          if (extracted.parsedQr) {
+            fillFromQr(extracted.parsedQr);
+          } else if (extracted.ocrFields) {
+            fillFromOcr(extracted.ocrFields);
+          }
+        })
+        .catch(() => {
+          // Sem rede/OCR indisponível: o utilizador preenche à mão, como antes.
+        })
+        .finally(() => setAnalyzing(false));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (capture === undefined) {
@@ -124,7 +168,7 @@ export default function ValidationScreen() {
     try {
       const input: ExpenseInput = {
         type,
-        source: capture?.existingFilePath ? 'UPLOAD' : 'CAMERA',
+        source: capture?.source ?? (capture?.existingFilePath ? 'UPLOAD' : 'CAMERA'),
         supplierName: supplierName || undefined,
         supplierNif: supplierNif || undefined,
         acquirerNif: acquirerNif || undefined,
@@ -133,12 +177,12 @@ export default function ValidationScreen() {
         documentDate: documentDate || undefined,
         documentTime: documentTime || undefined,
         currency,
-        amountBase: conversion ? conversion.amountBase : amountBase ? Number(amountBase) : undefined,
-        amountVat: conversion ? conversion.amountVat : amountVat ? Number(amountVat) : undefined,
-        amountTotal: conversion ? conversion.amountTotal : amountTotal ? Number(amountTotal) : undefined,
-        originalAmountBase: conversion && amountBase ? Number(amountBase) : undefined,
-        originalAmountVat: conversion && amountVat ? Number(amountVat) : undefined,
-        originalAmountTotal: conversion ? Number(amountTotal) : undefined,
+        amountBase: conversion ? conversion.amountBase : parseDecimal(amountBase),
+        amountVat: conversion ? conversion.amountVat : parseDecimal(amountVat),
+        amountTotal: conversion ? conversion.amountTotal : parseDecimal(amountTotal),
+        originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
+        originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
+        originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
         qrRawPayload: capture?.qrRawPayload,
       };
       // Upload manual já processado por /expenses/extract: o ficheiro já está
@@ -208,22 +252,28 @@ export default function ValidationScreen() {
             },
           ]}
         >
-          <Ionicons
-            name={capture.parsedQr ? 'checkmark-circle' : capture.ocrFields ? 'text-outline' : 'information-circle-outline'}
-            size={18}
-            color={capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary}
-          />
+          {analyzing ? (
+            <ActivityIndicator size="small" color={theme.textSecondary} />
+          ) : (
+            <Ionicons
+              name={capture.parsedQr ? 'checkmark-circle' : capture.ocrFields ? 'text-outline' : 'information-circle-outline'}
+              size={18}
+              color={capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary}
+            />
+          )}
           <Text
             style={[
               styles.qrBannerText,
               { color: capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary },
             ]}
           >
-            {capture.parsedQr
-              ? `QR code detetado — ATCUD ${capture.parsedQr.atcud || 'n/d'} · doc. ${capture.parsedQr.documentId || 'n/d'}`
-              : capture.ocrFields
-                ? 'Extraído por OCR (sem QR) — confirma os campos preenchidos.'
-                : 'Sem QR code — preenche os campos manualmente.'}
+            {analyzing
+              ? 'A analisar a fatura (QR/OCR) — podes ir preenchendo…'
+              : capture.parsedQr
+                ? `QR code detetado — ATCUD ${capture.parsedQr.atcud || 'n/d'} · doc. ${capture.parsedQr.documentId || 'n/d'}`
+                : capture.ocrFields
+                  ? 'Extraído por OCR (sem QR) — confirma os campos preenchidos.'
+                  : 'Sem QR code — preenche os campos manualmente.'}
           </Text>
         </View>
 

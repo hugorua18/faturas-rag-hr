@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createCanvas, loadImage, DOMMatrix } from '@napi-rs/canvas';
 import jsQR from 'jsqr';
 import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
-import { extractTextViaOcr, heuristicFieldsFromOcrText } from './ocr.service';
+import { extractTextViaOcr, heuristicFieldsFromOcrText, type OcrFields } from './ocr.service';
 
 // pdf.js pede um DOMMatrix global para renderizar em Node (normalmente só existe no browser).
 (global as unknown as { DOMMatrix?: unknown }).DOMMatrix ??= DOMMatrix;
@@ -12,7 +12,7 @@ const standardFontDataUrl = path.join(path.dirname(require.resolve('pdfjs-dist/p
 export interface IngestedDocument {
   parsedQr: ParsedInvoiceQr | null;
   qrText: string | null;
-  ocrFields: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
+  ocrFields: OcrFields | null;
   imageBuffer: Buffer;
   imageMimeType: 'image/png' | 'image/jpeg';
 }

@@ -108,6 +108,7 @@ function CameraScreen() {
       setPendingCapture({
         fileUri,
         fileMimeType: `image/${photo.format ?? 'jpeg'}`,
+        source: 'CAMERA',
         photoWidth: photo.width,
         photoHeight: photo.height,
         parsedQr,

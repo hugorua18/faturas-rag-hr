@@ -48,7 +48,12 @@ export const expensesRouter = Router();
 
 function toOptionalFloat(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
-  const parsed = Number(value);
+  // Teclados em locale PT produzem vírgula decimal ("12,50") — Number() daria
+  // NaN e o valor perdia-se em silêncio. O cliente já normaliza, mas manter
+  // aqui garante que nenhum caminho (app antiga, curl) volta a perder valores.
+  const normalized =
+    typeof value === 'string' && value.includes(',') ? value.replace(/\./g, '').replace(',', '.') : value;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

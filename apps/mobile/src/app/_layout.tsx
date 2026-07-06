@@ -6,6 +6,7 @@ import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { useTheme } from '@/hooks/use-theme';
+import { API_BASE_URL } from '@/api/config';
 import { getSessionToken } from '@/state/session';
 
 SplashScreen.preventAutoHideAsync();
@@ -23,6 +24,15 @@ export default function RootLayout() {
     getSessionToken().then((token) => {
       if (!token) router.replace('/login');
     });
+  }, []);
+
+  // O plano free do Render adormece o servidor ao fim de ~15 min de
+  // inatividade — este ping fire-and-forget acorda-o logo ao abrir a app,
+  // para o primeiro pedido real (lista, submissão) já apanhar o servidor
+  // quente em vez de esperar ~50s por um arranque a frio (que ao utilizador
+  // parecia a app congelada).
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/health`).catch(() => {});
   }, []);
 
   return (

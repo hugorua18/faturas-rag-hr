@@ -1,3 +1,5 @@
+import { parseDecimal } from '@/utils/number';
+
 export interface EurConversionResult {
   amountBase?: number;
   amountVat?: number;
@@ -21,13 +23,13 @@ export function convertToEur(
   originalTotal: string,
   eurTotal: string,
 ): EurConversionResult | null {
-  const total = Number(originalTotal);
-  const eur = Number(eurTotal);
+  const total = parseDecimal(originalTotal) ?? NaN;
+  const eur = parseDecimal(eurTotal) ?? NaN;
   if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(eur) || eur <= 0) return null;
 
   const factor = eur / total;
-  const base = Number(originalBase);
-  const vat = Number(originalVat);
+  const base = parseDecimal(originalBase) ?? NaN;
+  const vat = parseDecimal(originalVat) ?? NaN;
 
   return {
     amountBase: Number.isFinite(base) ? round2(base * factor) : undefined,

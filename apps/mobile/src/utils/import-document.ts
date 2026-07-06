@@ -23,6 +23,7 @@ export async function pickAndImportDocument(): Promise<boolean> {
     });
     setPendingCapture({
       fileUri: fileUrl ? resolveFileUrl(fileUrl) : asset.uri,
+      source: 'UPLOAD',
       fileMimeType,
       parsedQr,
       qrRawPayload: qrRawPayload ?? undefined,

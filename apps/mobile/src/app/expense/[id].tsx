@@ -29,6 +29,7 @@ import {
   SectionHeader,
 } from '@/components/expense-form';
 import { confirmAction } from '@/utils/alert';
+import { parseDecimal } from '@/utils/number';
 import { convertToEur } from '@/utils/currency-conversion';
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -128,12 +129,12 @@ export default function ExpenseDetailScreen() {
       documentDate: documentDate || undefined,
       documentTime: documentTime || undefined,
       currency,
-      amountBase: conversion ? conversion.amountBase : amountBase ? Number(amountBase) : undefined,
-      amountVat: conversion ? conversion.amountVat : amountVat ? Number(amountVat) : undefined,
-      amountTotal: conversion ? conversion.amountTotal : amountTotal ? Number(amountTotal) : undefined,
-      originalAmountBase: conversion && amountBase ? Number(amountBase) : undefined,
-      originalAmountVat: conversion && amountVat ? Number(amountVat) : undefined,
-      originalAmountTotal: conversion ? Number(amountTotal) : undefined,
+      amountBase: conversion ? conversion.amountBase : parseDecimal(amountBase),
+      amountVat: conversion ? conversion.amountVat : parseDecimal(amountVat),
+      amountTotal: conversion ? conversion.amountTotal : parseDecimal(amountTotal),
+      originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
+      originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
+      originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
     };
   }
 

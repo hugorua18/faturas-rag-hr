@@ -24,11 +24,30 @@ export interface CapturedFile {
 // para os endpoints /expenses e /reports, que exigem sessão (requireAuth). Rotas
 // não autenticadas (ex: /auth/google/callback) também podem usar isto sem
 // problema: sem token, o header simplesmente não é adicionado.
+// Tempo máximo por pedido: sem isto, um servidor a "acordar" (Render free
+// adormece ao fim de ~15 min) ou uma ligação móvel má deixavam o pedido
+// pendurado indefinidamente — para o utilizador, a app parecia congelada.
+// 60s dá folga para um arranque a frio (~50s) sem nunca prender para sempre.
+const REQUEST_TIMEOUT_MS = 60_000;
+
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = await getSessionToken();
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, signal: controller.signal });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error('O servidor demorou demasiado a responder — tenta novamente daqui a uns segundos.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   // Sessão expirada (30 dias) ou revogada no servidor — sem isto, os ecrãs
   // ficavam presos a receber 401 para sempre, sem forma de voltar a autenticar.
   if (response.status === 401 && token) {
@@ -130,7 +149,11 @@ export async function lookupSupplierName(nif: string): Promise<{ name: string | 
 export interface ExtractedDocument {
   parsedQr: ParsedInvoiceQr | null;
   qrRawPayload: string | null;
-  ocrFields: Partial<Pick<ParsedInvoiceQr, 'issuerNif' | 'documentDate' | 'vatAmount' | 'totalAmount' | 'baseAmount'>> | null;
+  ocrFields:
+    | (Partial<
+        Pick<ParsedInvoiceQr, 'issuerNif' | 'acquirerNif' | 'documentDate' | 'documentId' | 'vatAmount' | 'totalAmount' | 'baseAmount'>
+      > & { supplierName?: string; documentTime?: string })
+    | null;
   originalFilePath: string;
   /** URL assinada de curta duração — usar para pré-visualização (resolveFileUrl), nunca originalFilePath diretamente. */
   fileUrl: string | null;
