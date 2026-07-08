@@ -79,9 +79,32 @@ function extensionForMimeType(mimeType: string): string {
   return mimeType === 'image/png' ? '.png' : '.jpg';
 }
 
+// Nome legível para o ficheiro no Drive — um humano a navegar nas pastas deve
+// perceber o que é sem abrir ("2026-07-07 · LUSO PINSA, LDA. · FT 1A2601-3896"),
+// em vez do UUID interno da despesa. Caracteres problemáticos são substituídos
+// e o comprimento limitado; recua para o id quando não há nenhum campo útil.
+function driveInvoiceFileName(expense: InvoiceForDrive, mimeType: string): string {
+  const sanitize = (value: string) => value.replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
+  const parts = [expense.documentDate, expense.supplierName || expense.supplierNif, expense.documentId]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .map(sanitize);
+  const base = parts.length > 0 ? parts.join(' · ').slice(0, 120) : expense.id;
+  return `${base}${extensionForMimeType(mimeType)}`;
+}
+
+interface InvoiceForDrive {
+  id: string;
+  acquirerNif: string | null;
+  documentDate: string | null;
+  originalFilePath: string | null;
+  supplierName?: string | null;
+  supplierNif?: string | null;
+  documentId?: string | null;
+}
+
 export async function uploadInvoiceToDrive(
   user: User,
-  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
+  expense: InvoiceForDrive,
   fileBuffer: Buffer,
   mimeType: string,
 ): Promise<string> {
@@ -93,7 +116,7 @@ export async function uploadInvoiceToDrive(
   const year = expense.documentDate ? expense.documentDate.slice(0, 4) : NO_DATE_KEY;
   const month = expense.documentDate ? expense.documentDate.slice(5, 7) : NO_DATE_KEY;
   const folderId = await ensureFolderPath(drive, ['DespesasApp', nifFolder, year, month], user.driveRootFolderId);
-  const filename = `${expense.id}${extensionForMimeType(mimeType)}`;
+  const filename = driveInvoiceFileName(expense, mimeType);
 
   const { data } = await drive.files.create({
     requestBody: { name: filename, parents: [folderId] },
@@ -177,10 +200,7 @@ function mimeTypeForFilePath(filePath: string): string {
 // por isso corre em segundo plano (não é feito "await" pelos chamadores).
 // Vive aqui (e não em routes/expenses.ts) para o poller do Gmail também o
 // poder usar sem criar um ciclo de imports.
-export function archiveInvoiceToDriveBestEffort(
-  user: User,
-  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
-): void {
+export function archiveInvoiceToDriveBestEffort(user: User, expense: InvoiceForDrive): void {
   const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
   if (!absolutePath) return;
   void (async () => {
