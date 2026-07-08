@@ -138,6 +138,14 @@ export async function listExpenses(filter?: {
   return response.json();
 }
 
+// Dispara já o poll da caixa de email no servidor (em vez de esperar pelo
+// tick de 5 min) — usado quando o utilizador abre a fila "Tratamento manual".
+// Pode demorar vários segundos (Gmail + anexos); o timeout do apiFetch cobre.
+export async function syncEmailIngestion(): Promise<void> {
+  const response = await apiFetch('/expenses/sync-email', { method: 'POST' });
+  if (!response.ok) throw new Error('Falha ao sincronizar o email');
+}
+
 // Nome do prestador a partir do NIF: histórico do próprio utilizador primeiro,
 // depois o registo oficial de IVA da UE (VIES). name=null quando desconhecido.
 export async function lookupSupplierName(nif: string): Promise<{ name: string | null; source: string | null }> {

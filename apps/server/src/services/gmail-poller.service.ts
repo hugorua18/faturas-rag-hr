@@ -105,6 +105,22 @@ export async function poll(): Promise<void> {
   }
 }
 
+// Nunca deixar dois polls correr em simultâneo (o do intervalo + um pedido
+// manual da app): a idempotência por ProcessedEmail é um check-then-create,
+// e dois polls concorrentes podiam ambos processar a mesma mensagem antes de
+// qualquer um gravar o registo — resultando numa despesa duplicada. Quem
+// chegar durante um poll em curso simplesmente espera pelo resultado dele.
+let pollInFlight: Promise<void> | null = null;
+
+export function triggerPoll(): Promise<void> {
+  if (!pollInFlight) {
+    pollInFlight = poll().finally(() => {
+      pollInFlight = null;
+    });
+  }
+  return pollInFlight;
+}
+
 export function startGmailPolling(): void {
   if (!getGmailClient()) {
     console.warn(
@@ -112,8 +128,8 @@ export function startGmailPolling(): void {
     );
     return;
   }
-  void poll().catch((err) => console.error('[gmail-poller] falha no polling inicial', err));
+  void triggerPoll().catch((err) => console.error('[gmail-poller] falha no polling inicial', err));
   setInterval(() => {
-    void poll().catch((err) => console.error('[gmail-poller] falha no polling', err));
+    void triggerPoll().catch((err) => console.error('[gmail-poller] falha no polling', err));
   }, POLL_INTERVAL_MS);
 }

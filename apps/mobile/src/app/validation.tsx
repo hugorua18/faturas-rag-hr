@@ -364,7 +364,7 @@ export default function ValidationScreen() {
         </Pressable>
       </ScrollView>
 
-      <PhotoLightbox visible={previewVisible} uri={capture.fileUri} onClose={() => setPreviewVisible(false)} />
+      {previewVisible && <PhotoLightbox visible uri={capture.fileUri} onClose={() => setPreviewVisible(false)} />}
     </KeyboardAvoidingView>
   );
 }

@@ -8,6 +8,7 @@ import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
 import { uploadInvoiceToDrive } from '../services/drive.service';
+import { triggerPoll } from '../services/gmail-poller.service';
 import { uploadsDir, resolveSafeUploadPath, signUploadPath } from '../utils/uploads-path';
 
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -147,6 +148,20 @@ expensesRouter.post('/extract', upload.single('file'), async (req, res) => {
 
 // Agregação por NIF adquirente — base do ecrã de relatórios (NIF -> meses -> despesas).
 // Registado antes de "/:id" para o Express não interpretar "summary" como um id.
+// Sincronização a pedido da caixa de email (fila "Tratamento manual"): corre
+// o mesmo poll do intervalo de 5 min, mas já — para o utilizador não esperar
+// pelo próximo tick para ver faturas acabadas de chegar. Partilha o lock
+// anti-concorrência do poller (triggerPoll).
+expensesRouter.post('/sync-email', async (_req, res) => {
+  try {
+    await triggerPoll();
+    res.status(204).send();
+  } catch (err) {
+    console.error('[gmail-poller] falha na sincronização a pedido', err);
+    res.status(502).json({ error: 'Falha ao sincronizar o email' });
+  }
+});
+
 expensesRouter.get('/summary/nifs', async (req, res) => {
   const expenses = await prisma.expense.findMany({ where: { userId: req.user!.id, status: 'SUBMETIDA' } });
   const groups = new Map<string, { documentCount: number; totalAmount: number }>();

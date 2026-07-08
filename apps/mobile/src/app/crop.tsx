@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -19,6 +19,7 @@ import * as Haptics from 'expo-haptics';
 
 import { useTheme } from '@/hooks/use-theme';
 import { takePendingCapture, setPendingCapture, type PendingCapture } from '@/state/pending-capture';
+import { detectDocumentCorners } from '@/utils/detect-document-corners';
 
 interface Point {
   x: number;
@@ -59,6 +60,10 @@ export default function CropScreen() {
   // Ordem do perímetro (não bounding box): topo-esq, topo-dir, baixo-dir, baixo-esq.
   const [points, setPoints] = useState<Point[] | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [autoDetected, setAutoDetected] = useState(false);
+  // Depois de o utilizador arrastar um canto, a deteção automática (que pode
+  // chegar uns ms mais tarde) nunca deve sobrepor o ajuste manual.
+  const userAdjustedRef = useRef(false);
 
   const blockWidth = Math.max(1, windowWidth - PREVIEW_SIDE_MARGIN * 2);
   const blockHeight = Math.max(1, windowHeight * PREVIEW_HEIGHT_RATIO);
@@ -92,8 +97,20 @@ export default function CropScreen() {
       { x: rect.x + rect.width * (1 - DEFAULT_INSET), y: rect.y + rect.height * DEFAULT_INSET },
       { x: rect.x + rect.width * (1 - DEFAULT_INSET), y: rect.y + rect.height * (1 - DEFAULT_INSET) },
       { x: rect.x + rect.width * DEFAULT_INSET, y: rect.y + rect.height * (1 - DEFAULT_INSET) },
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     ]);
+
+    // Deteção automática das margens por contraste (100% local, ~100-300ms):
+    // corre depois de o ecrã já estar interativo com as margens por omissão e
+    // só as substitui se o utilizador ainda não tiver mexido em nada.
+    detectDocumentCorners(capture.fileUri)
+      .then((corners) => {
+        if (!corners || userAdjustedRef.current) return;
+        setPoints(
+          corners.map((c) => ({ x: rect.x + c.x * rect.width, y: rect.y + c.y * rect.height })),
+        );
+        setAutoDetected(true);
+      })
+      .catch(() => {});
     // Só recalcular quando a captura muda — não quando o utilizador arrasta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [capture]);
@@ -114,6 +131,7 @@ export default function CropScreen() {
   }
 
   function updatePoint(index: number, x: number, y: number) {
+    userAdjustedRef.current = true;
     setPoints((prev) => (prev ? prev.map((p, i) => (i === index ? { x, y } : p)) : prev));
   }
 
@@ -169,7 +187,9 @@ export default function CropScreen() {
         }}
       />
       <Text style={[styles.hint, { color: theme.textSecondary }]}>
-        Arrasta os cantos para ajustar às margens do documento
+        {autoDetected
+          ? 'Margens detetadas automaticamente — ajusta os cantos se necessário'
+          : 'Arrasta os cantos para ajustar às margens do documento'}
       </Text>
 
       <View style={styles.centerWrap}>

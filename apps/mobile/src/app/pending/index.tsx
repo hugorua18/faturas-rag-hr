@@ -6,7 +6,7 @@ import { EXPENSE_TYPE_LABELS, type Expense, type ExpenseType } from '@invoice-sc
 
 import { useTheme } from '@/hooks/use-theme';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { listExpenses, resolveFileUrl } from '@/api/client';
+import { listExpenses, resolveFileUrl, syncEmailIngestion } from '@/api/client';
 import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
 import { formatCurrency } from '@/utils/format';
 
@@ -20,6 +20,7 @@ export default function PendingReviewListScreen() {
   const theme = useTheme();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -28,15 +29,29 @@ export default function PendingReviewListScreen() {
       let cancelled = false;
       setLoading(true);
       setError(null);
-      listExpenses({ status: 'TRATAMENTO_MANUAL' })
-        .then((data) => {
-          if (!cancelled) setExpenses(data);
-        })
-        .catch((err) => {
-          if (!cancelled) setError(err instanceof Error ? err.message : 'Falha ao carregar despesas pendentes');
+      setSyncing(true);
+      // Primeiro força o servidor a verificar a caixa de email (faturas
+      // acabadas de chegar entram já na fila, sem esperar pelo tick de 5 min);
+      // se a sincronização falhar (Gmail indisponível), mostra na mesma a
+      // lista com o que já existe.
+      syncEmailIngestion()
+        .catch(() => {})
+        .then(() => {
+          if (cancelled) return;
+          setSyncing(false);
+          return listExpenses({ status: 'TRATAMENTO_MANUAL' })
+            .then((data) => {
+              if (!cancelled) setExpenses(data);
+            })
+            .catch((err) => {
+              if (!cancelled) setError(err instanceof Error ? err.message : 'Falha ao carregar despesas pendentes');
+            });
         })
         .finally(() => {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) {
+            setLoading(false);
+            setSyncing(false);
+          }
         });
       return () => {
         cancelled = true;
@@ -46,7 +61,13 @@ export default function PendingReviewListScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.groupedBackground }]}>
-      {loading && <ActivityIndicator style={styles.spinner} color={theme.textSecondary} />}
+      {syncing && (
+        <View style={styles.syncRow}>
+          <ActivityIndicator size="small" color={theme.textSecondary} />
+          <Text style={[styles.syncText, { color: theme.textSecondary }]}>A verificar o email…</Text>
+        </View>
+      )}
+      {loading && !syncing && <ActivityIndicator style={styles.spinner} color={theme.textSecondary} />}
       {error && (
         <View style={styles.errorBox}>
           <Ionicons name="cloud-offline-outline" size={28} color={theme.destructive} />
@@ -113,6 +134,8 @@ export default function PendingReviewListScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   spinner: { marginTop: 16 },
+  syncRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 },
+  syncText: { fontSize: 13 },
   errorBox: { alignItems: 'center', gap: 8, marginTop: 60, paddingHorizontal: 24 },
   error: { textAlign: 'center', fontSize: 14 },
   retry: { fontSize: 14, fontWeight: '600', marginTop: 4 },

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -233,7 +234,29 @@ export default function ExpenseDetailScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      <Stack.Screen options={{ title: expense.supplierName || 'Despesa' }} />
+      <Stack.Screen
+        options={{
+          title: expense.supplierName || 'Despesa',
+          // Botão voltar explícito, com área de toque generosa e teclado
+          // dispensado primeiro: a seta nativa tem um alvo pequeno e, com o
+          // teclado aberto, o primeiro toque era engolido — parecia que o
+          // "voltar" tinha congelado.
+          headerLeft: () => (
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                if (router.canGoBack()) router.back();
+                else router.replace('/expenses');
+              }}
+              hitSlop={16}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingRight: 12 }}
+            >
+              <Ionicons name="chevron-back" size={24} color={theme.accent} />
+              <Text style={{ color: theme.accent, fontSize: 16 }}>Voltar</Text>
+            </Pressable>
+          ),
+        }}
+      />
       <ScrollView
         style={{ backgroundColor: theme.groupedBackground }}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 + insets.bottom }, webMaxWidthStyle]}
@@ -366,9 +389,12 @@ export default function ExpenseDetailScreen() {
         </Pressable>
       </ScrollView>
 
-      {expense.fileUrl && (
+      {/* Montada só enquanto aberta: um Modal transparente permanentemente
+          montado pode continuar a intercetar toques no iOS depois do pop do
+          ecrã — uma das causas do "voltar" parecer congelado. */}
+      {expense.fileUrl && previewVisible && (
         <PhotoLightbox
-          visible={previewVisible}
+          visible
           uri={resolveFileUrl(expense.fileUrl)}
           onClose={() => setPreviewVisible(false)}
         />
