@@ -7,7 +7,9 @@ import { authRouter } from './routes/auth';
 import { requireAuth } from './middleware/require-auth';
 import { startGmailPolling } from './services/gmail-poller.service';
 import { prisma } from './db/prisma';
-import { resolveSafeUploadPath, verifyUploadSignature } from './utils/uploads-path';
+import fs from 'node:fs';
+import { resolveSafeUploadPath, verifyUploadSignature, verifyExpenseFileSignature } from './utils/uploads-path';
+import { fetchDriveFileStream } from './services/drive.service';
 
 const app = express();
 const port = Number(process.env.PORT) || 4001;
@@ -47,6 +49,47 @@ app.get('/uploads/:filename', (req, res) => {
     return;
   }
   res.sendFile(absolutePath);
+});
+
+// Ficheiro original de uma despesa, com URL assinada de curta duração (ver
+// signExpenseFileUrl): serve o ficheiro local se ainda existir e recua para a
+// cópia arquivada no Google Drive — o disco do Render free é efémero e cada
+// deploy limpa uploads/, mas o Drive guarda o original para sempre.
+// Registado ANTES do router autenticado de /expenses: o acesso é validado
+// pela assinatura (as URLs são gerador por rotas já autenticadas), porque
+// <img>/<Image> não conseguem enviar headers Authorization em todas as plataformas.
+app.get('/expenses/:id/file', async (req, res) => {
+  const { exp, sig } = req.query as { exp?: string; sig?: string };
+  if (!exp || !sig || !verifyExpenseFileSignature(req.params.id, exp, sig)) {
+    res.status(403).json({ error: 'Link inválido ou expirado' });
+    return;
+  }
+  try {
+    const expense = await prisma.expense.findUnique({ where: { id: req.params.id } });
+    if (!expense) {
+      res.status(404).json({ error: 'Despesa não encontrada' });
+      return;
+    }
+    const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+    if (absolutePath && fs.existsSync(absolutePath)) {
+      res.sendFile(absolutePath);
+      return;
+    }
+    if (expense.driveFileId && expense.userId) {
+      const user = await prisma.user.findUnique({ where: { id: expense.userId } });
+      if (user?.googleRefreshTokenEnc) {
+        const { stream, mimeType } = await fetchDriveFileStream(user, expense.driveFileId);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        stream.pipe(res);
+        return;
+      }
+    }
+    res.status(404).json({ error: 'O ficheiro original já não está disponível' });
+  } catch (err) {
+    console.error(`[expenses] falha a servir o ficheiro da despesa ${req.params.id}`, err);
+    res.status(502).json({ error: 'Falha ao obter o ficheiro' });
+  }
 });
 
 // Toca na BD (não só no processo) para que o ping externo de keep-alive

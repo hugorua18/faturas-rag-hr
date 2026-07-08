@@ -58,3 +58,28 @@ export function verifyUploadSignature(originalFilePath: string, expiresAtRaw: st
   const actual = Buffer.from(sig);
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
+
+// URL assinada por DESPESA (não por ficheiro): /expenses/:id/file resolve o
+// conteúdo no momento do pedido — ficheiro local se ainda existir, senão a
+// cópia arquivada no Google Drive. Necessário porque o disco do Render free é
+// efémero (cada deploy apaga uploads/) e as imagens antigas só sobrevivem no
+// Drive. Mesmo modelo de assinatura HMAC + prazo curto do signUploadPath.
+function signExpenseFile(expenseId: string, expiresAt: number): string {
+  return crypto
+    .createHmac('sha256', getFileAccessKey())
+    .update(`expense-file:${expenseId}.${expiresAt}`)
+    .digest('base64url');
+}
+
+export function signExpenseFileUrl(expenseId: string): string {
+  const expiresAt = Date.now() + FILE_ACCESS_TTL_MS;
+  return `/expenses/${expenseId}/file?exp=${expiresAt}&sig=${signExpenseFile(expenseId, expiresAt)}`;
+}
+
+export function verifyExpenseFileSignature(expenseId: string, expiresAtRaw: string, sig: string): boolean {
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return false;
+  const expected = Buffer.from(signExpenseFile(expenseId, expiresAt));
+  const actual = Buffer.from(sig);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}

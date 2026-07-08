@@ -1,8 +1,12 @@
 import { Readable } from 'node:stream';
+import fs from 'node:fs';
+import path from 'node:path';
 import { google, type drive_v3 } from 'googleapis';
 import type { User } from '@prisma/client';
 import { NO_DATE_KEY } from '@invoice-scanner/shared';
+import { prisma } from '../db/prisma';
 import { decryptRefreshToken } from './google-auth.service';
+import { resolveSafeUploadPath } from '../utils/uploads-path';
 
 // Mesmas variáveis do Google Sign-In (Fase 7) — NÃO as do poller do Gmail
 // (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN), que são um fluxo
@@ -129,4 +133,59 @@ export async function uploadReportToDrive(
     throw new Error('Falha ao carregar o relatório para o Drive: resposta sem id');
   }
   return data.id;
+}
+
+// Lê de volta um ficheiro arquivado no Drive — usado quando o ficheiro local
+// já não existe (o disco do Render free é efémero: cada deploy limpa uploads/;
+// a cópia durável é a do Drive).
+export async function fetchDriveFileStream(
+  user: { googleRefreshTokenEnc: string | null; googleAuthClientId: string | null },
+  driveFileId: string,
+): Promise<{ stream: Readable; mimeType: string }> {
+  const drive = getDriveClientForUser(user);
+  const response = await drive.files.get({ fileId: driveFileId, alt: 'media' }, { responseType: 'stream' });
+  const mimeType = (response.headers as Record<string, string>)['content-type'] ?? 'application/octet-stream';
+  return { stream: response.data as unknown as Readable, mimeType };
+}
+
+export async function fetchDriveFileBuffer(
+  user: { googleRefreshTokenEnc: string | null; googleAuthClientId: string | null },
+  driveFileId: string,
+): Promise<Buffer> {
+  const { stream } = await fetchDriveFileStream(user, driveFileId);
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function mimeTypeForFilePath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  return 'image/png';
+}
+
+// Arquivo no Drive é best-effort: nunca deve atrasar/bloquear a resposta ao
+// cliente nem falhar o pedido — a despesa já está guardada localmente, que é
+// o que importa. Falhas (sem refresh token, erro de rede/API) só são logadas,
+// por isso corre em segundo plano (não é feito "await" pelos chamadores).
+// Vive aqui (e não em routes/expenses.ts) para o poller do Gmail também o
+// poder usar sem criar um ciclo de imports.
+export function archiveInvoiceToDriveBestEffort(
+  user: User,
+  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
+): void {
+  const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+  if (!absolutePath) return;
+  void (async () => {
+    try {
+      const fileBuffer = fs.readFileSync(absolutePath);
+      const mimeType = mimeTypeForFilePath(expense.originalFilePath!);
+      const driveFileId = await uploadInvoiceToDrive(user, expense, fileBuffer, mimeType);
+      await prisma.expense.update({ where: { id: expense.id }, data: { driveFileId } });
+    } catch (err) {
+      console.error(`[drive] falha ao arquivar a despesa ${expense.id} no Drive`, err);
+    }
+  })();
 }

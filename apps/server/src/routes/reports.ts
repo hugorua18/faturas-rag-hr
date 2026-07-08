@@ -72,7 +72,7 @@ reportsRouter.get('/:nif/:period/pdf', async (req, res) => {
   const label = typeof req.query.label === 'string' ? req.query.label : period;
   try {
     const { expenses, status } = await loadMonthlyReportData(req.user!.id, nif, period);
-    const buffer = await buildMonthlyReportPdf(nif, label, status, expenses);
+    const buffer = await buildMonthlyReportPdf(nif, label, status, expenses, req.user ?? null);
     await archiveReportToDriveBestEffort(req.user, nif, period, buffer, 'application/pdf', 'pdf');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${period}.pdf"`);
@@ -117,7 +117,7 @@ reportsRouter.get('/:nif/pdf', async (req, res) => {
   }
   try {
     const { expenses } = await loadRangeReportData(req.user!.id, nif, from, to);
-    const buffer = await buildMonthlyReportPdf(nif, label || `${from} a ${to}`, null, expenses);
+    const buffer = await buildMonthlyReportPdf(nif, label || `${from} a ${to}`, null, expenses, req.user ?? null);
     // Usa o intervalo em bruto (não o "label" livre) como período no caminho do
     // Drive — o label pode ter espaços/acentos, inseguros num nome de ficheiro.
     await archiveReportToDriveBestEffort(req.user, nif, `${from}-a-${to}`, buffer, 'application/pdf', 'pdf');

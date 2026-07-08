@@ -7,9 +7,9 @@ import type { User } from '@prisma/client';
 import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_KEY, NO_DATE_KEY } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
-import { uploadInvoiceToDrive } from '../services/drive.service';
+import { archiveInvoiceToDriveBestEffort } from '../services/drive.service';
 import { triggerPoll } from '../services/gmail-poller.service';
-import { uploadsDir, resolveSafeUploadPath, signUploadPath } from '../utils/uploads-path';
+import { uploadsDir, resolveSafeUploadPath, signUploadPath, signExpenseFileUrl } from '../utils/uploads-path';
 
 fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -36,11 +36,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, fileFilter: uploadFileFilter, limits: { fileSize: 20 * 1024 * 1024 } });
 
-// Anexa fileUrl (URL assinada de curta duração para a imagem/PDF original) à
-// resposta JSON de uma despesa — nunca expor originalFilePath diretamente
-// como URL, ver utils/uploads-path.ts.
-function toExpenseJson<T extends { originalFilePath: string | null }>(expense: T): T & { fileUrl: string | null } {
-  return { ...expense, fileUrl: signUploadPath(expense.originalFilePath) };
+// Anexa fileUrl (URL assinada de curta duração) à resposta JSON de uma
+// despesa. Aponta para /expenses/:id/file, que serve o ficheiro local se ainda
+// existir e recua para a cópia arquivada no Drive — o disco do Render free é
+// efémero e as imagens locais desaparecem em cada deploy.
+function toExpenseJson<T extends { id: string; originalFilePath: string | null; driveFileId: string | null }>(
+  expense: T,
+): T & { fileUrl: string | null } {
+  return {
+    ...expense,
+    fileUrl: expense.originalFilePath || expense.driveFileId ? signExpenseFileUrl(expense.id) : null,
+  };
 }
 
 const VALID_SOURCES = ['CAMERA', 'EMAIL', 'UPLOAD'];
@@ -68,34 +74,6 @@ function deleteUploadedFile(originalFilePath: string | null | undefined): void {
   fs.rm(absolutePath, { force: true }, () => {
     // Falha a apagar o ficheiro não deve impedir a operação na BD (ex: já não existe).
   });
-}
-
-function mimeTypeForFilePath(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  return 'image/png';
-}
-
-// Arquivo no Drive é best-effort: nunca deve atrasar/bloquear a resposta ao
-// cliente nem falhar o pedido — a despesa já está guardada localmente, que é
-// o que importa. Falhas (sem refresh token, erro de rede/API) só são logadas,
-// por isso corre em segundo plano (não é feito "await" no handler da rota).
-function archiveInvoiceToDriveBestEffort(
-  user: User,
-  expense: { id: string; acquirerNif: string | null; documentDate: string | null; originalFilePath: string | null },
-): void {
-  const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
-  if (!absolutePath) return;
-  void (async () => {
-    try {
-      const fileBuffer = fs.readFileSync(absolutePath);
-      const mimeType = mimeTypeForFilePath(expense.originalFilePath!);
-      const driveFileId = await uploadInvoiceToDrive(user, expense, fileBuffer, mimeType);
-      await prisma.expense.update({ where: { id: expense.id }, data: { driveFileId } });
-    } catch (err) {
-      console.error(`[drive] falha ao arquivar a despesa ${expense.id} no Drive`, err);
-    }
-  })();
 }
 
 expensesRouter.get('/', async (req, res) => {

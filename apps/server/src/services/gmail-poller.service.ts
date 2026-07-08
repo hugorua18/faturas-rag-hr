@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { google, type gmail_v1 } from 'googleapis';
 import type { User } from '@prisma/client';
 import { ingestDocument } from './document-ingest.service';
+import { archiveInvoiceToDriveBestEffort } from './drive.service';
 import { prisma } from '../db/prisma';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -88,7 +89,7 @@ async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
 // deixam a mensagem POR marcar (retry no próximo poll) — antes, a mensagem era
 // marcada como processada mesmo com anexos falhados, perdendo a fatura para
 // sempre (ex: falha transitória de rede ou do processamento do PDF).
-async function processMessage(gmail: gmail_v1.Gmail, messageId: string, userId: string): Promise<boolean> {
+async function processMessage(gmail: gmail_v1.Gmail, messageId: string, user: User): Promise<boolean> {
   const { data: message } = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
 
   const attachmentParts: AttachmentPart[] = [];
@@ -111,9 +112,9 @@ async function processMessage(gmail: gmail_v1.Gmail, messageId: string, userId: 
       const filename = `${crypto.randomUUID()}${ext}`;
       fs.writeFileSync(path.join(uploadsDir, filename), imageBuffer);
 
-      await prisma.expense.create({
+      const expense = await prisma.expense.create({
         data: {
-          userId,
+          userId: user.id,
           status: 'TRATAMENTO_MANUAL',
           source: 'EMAIL',
           type: 'OUTROS',
@@ -131,6 +132,10 @@ async function processMessage(gmail: gmail_v1.Gmail, messageId: string, userId: 
           qrRawPayload: qrText || undefined,
         },
       });
+      // Arquiva já no Drive (não só na confirmação): o disco do Render é
+      // efémero — sem isto, a imagem da fatura perdia-se no deploy seguinte
+      // e a fila "Tratamento manual" mostrava despesas sem visualização.
+      archiveInvoiceToDriveBestEffort(user, expense);
     } catch (err) {
       failures++;
       console.error(`[gmail-poller] falha a processar anexo "${part.filename}" da mensagem ${messageId}`, err);
@@ -180,7 +185,7 @@ export async function poll(): Promise<void> {
       if (!id) continue;
       const alreadyProcessed = await prisma.processedEmail.findUnique({ where: { gmailMessageId: id } });
       if (alreadyProcessed) continue;
-      await processMessage(gmail, id, user.id);
+      await processMessage(gmail, id, user);
     }
     pageToken = data.nextPageToken ?? undefined;
   } while (pageToken);

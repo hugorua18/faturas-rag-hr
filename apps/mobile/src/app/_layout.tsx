@@ -43,8 +43,12 @@ export default function RootLayout() {
   // mesmo fluxo do upload manual (extração → validação).
   useEffect(() => {
     const handleUrl = (url: string | null) => {
-      if (!url || !url.startsWith('file://')) return;
-      void importSharedFile(url);
+      // Pela extensão e não pelo scheme: o iOS/expo-router pode entregar o
+      // caminho como file://... OU embrulhado no scheme da app
+      // (invoicescanner://private/...). URLs de OAuth/rotas nunca terminam
+      // numa extensão de documento, por isso não há colisão.
+      if (!url || !/\.(pdf|png|jpe?g|webp|gif)(\?|#|$)/i.test(url)) return;
+      importSharedFile(url);
     };
     Linking.getInitialURL().then(handleUrl).catch(() => {});
     const subscription = Linking.addEventListener('url', (event) => handleUrl(event.url));

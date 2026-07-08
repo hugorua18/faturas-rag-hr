@@ -3,8 +3,16 @@ import pdfMake from 'pdfmake';
 import type { Content } from 'pdfmake/interfaces';
 import { EXPENSE_TYPE_LABELS, REPORT_STATUS_LABELS, type ExpenseType, type ReportStatus } from '@invoice-scanner/shared';
 import { resolveSafeUploadPath } from '../utils/uploads-path';
+import { fetchDriveFileBuffer } from './drive.service';
+
+export interface ReportUser {
+  googleRefreshTokenEnc: string | null;
+  googleAuthClientId: string | null;
+}
 
 export interface ExpenseForReport {
+  id: string;
+  driveFileId: string | null;
   type: ExpenseType;
   supplierName: string | null;
   supplierNif: string | null;
@@ -29,17 +37,101 @@ function isPng(buffer: Buffer): boolean {
 // Ficheiros corrompidos/vazios (ex: capturas de teste falhadas) não têm um cabeçalho
 // de imagem válido — o pdfmake só deteta isto ao gerar o documento e aborta o PDF
 // inteiro, por isso validamos aqui e tratamos como "sem imagem" em vez de rebentar.
-function readImageAsDataUrl(originalFilePath: string | null): string | undefined {
-  const absolutePath = resolveSafeUploadPath(originalFilePath);
-  if (!absolutePath) return undefined;
-  try {
-    const buffer = fs.readFileSync(absolutePath);
-    if (isPng(buffer)) return `data:image/png;base64,${buffer.toString('base64')}`;
-    if (isJpeg(buffer)) return `data:image/jpeg;base64,${buffer.toString('base64')}`;
-    return undefined;
-  } catch {
-    return undefined;
+function bufferToDataUrl(buffer: Buffer): string | undefined {
+  if (isPng(buffer)) return `data:image/png;base64,${buffer.toString('base64')}`;
+  if (isJpeg(buffer)) return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+  return undefined;
+}
+
+// Ficheiro local primeiro; quando já não existe (o disco do Render free é
+// efémero — cada deploy limpa uploads/), recua para a cópia arquivada no
+// Google Drive do utilizador. Sem imagem em nenhum dos sítios → "Sem imagem".
+async function readImageAsDataUrl(expense: ExpenseForReport, user: ReportUser | null): Promise<string | undefined> {
+  const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+  if (absolutePath) {
+    try {
+      const dataUrl = bufferToDataUrl(fs.readFileSync(absolutePath));
+      if (dataUrl) return dataUrl;
+    } catch {
+      // cai para o Drive
+    }
   }
+  if (expense.driveFileId && user?.googleRefreshTokenEnc) {
+    try {
+      return bufferToDataUrl(await fetchDriveFileBuffer(user, expense.driveFileId));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+// Resumo pedido pelo utilizador: por mês (e ano) × tipo de despesa — nº de
+// documentos, base (sem IVA), IVA e total (com IVA). Aparece no início do
+// relatório, antes do detalhe documento a documento.
+function buildSummaryContent(expenses: ExpenseForReport[]): Content[] {
+  if (expenses.length === 0) return [];
+
+  const groups = new Map<string, { count: number; base: number; vat: number; total: number }>();
+  for (const e of expenses) {
+    const month = e.documentDate ? e.documentDate.slice(0, 7) : 'Sem data';
+    const key = `${month}|${e.type}`;
+    const entry = groups.get(key) ?? { count: 0, base: 0, vat: 0, total: 0 };
+    entry.count += 1;
+    entry.base += e.amountBase ?? 0;
+    entry.vat += e.amountVat ?? 0;
+    entry.total += e.amountTotal ?? 0;
+    groups.set(key, entry);
+  }
+
+  const rows = Array.from(groups.entries())
+    .map(([key, stats]) => {
+      const [month, type] = key.split('|');
+      return { month, type: type as ExpenseType, ...stats };
+    })
+    .sort((a, b) => a.month.localeCompare(b.month) || a.type.localeCompare(b.type));
+
+  const totals = rows.reduce(
+    (acc, r) => ({ count: acc.count + r.count, base: acc.base + r.base, vat: acc.vat + r.vat, total: acc.total + r.total }),
+    { count: 0, base: 0, vat: 0, total: 0 },
+  );
+
+  const headerCells = ['Mês', 'Tipo', 'Documentos', 'Base (s/ IVA)', 'IVA', 'Total (c/ IVA)'].map((text) => ({
+    text,
+    bold: true,
+    fillColor: '#f0f0f0',
+  }));
+
+  return [
+    { text: 'Resumo', style: 'sectionTitle' },
+    {
+      table: {
+        headerRows: 1,
+        widths: ['auto', '*', 'auto', 'auto', 'auto', 'auto'],
+        body: [
+          headerCells,
+          ...rows.map((r) => [
+            r.month,
+            EXPENSE_TYPE_LABELS[r.type] ?? r.type,
+            { text: String(r.count), alignment: 'right' },
+            { text: currency(r.base), alignment: 'right' },
+            { text: currency(r.vat), alignment: 'right' },
+            { text: currency(r.total), alignment: 'right' },
+          ]),
+          [
+            { text: 'Total', bold: true },
+            '',
+            { text: String(totals.count), alignment: 'right', bold: true },
+            { text: currency(totals.base), alignment: 'right', bold: true },
+            { text: currency(totals.vat), alignment: 'right', bold: true },
+            { text: currency(totals.total), alignment: 'right', bold: true },
+          ],
+        ],
+      },
+      layout: 'lightHorizontalLines',
+      margin: [0, 0, 0, 20],
+    } as Content,
+  ];
 }
 
 function currency(value: number | null | undefined): string {
@@ -51,6 +143,7 @@ export async function buildMonthlyReportPdf(
   periodLabel: string,
   status: ReportStatus | null,
   expenses: ExpenseForReport[],
+  user: ReportUser | null = null,
 ): Promise<Buffer> {
   const total = expenses.reduce((sum, e) => sum + (e.amountTotal ?? 0), 0);
 
@@ -60,10 +153,12 @@ export async function buildMonthlyReportPdf(
     { text: `Período: ${periodLabel}`, style: 'subtitle' },
     ...(status ? [{ text: `Estado: ${REPORT_STATUS_LABELS[status]}`, style: 'subtitle' }] : []),
     { text: `Total: ${currency(total)} · ${expenses.length} documento(s)`, style: 'subtitle', margin: [0, 0, 0, 16] },
+    ...buildSummaryContent(expenses),
+    ...(expenses.length > 0 ? [{ text: 'Documentos', style: 'sectionTitle' } as Content] : []),
   ];
 
   for (const expense of expenses) {
-    const dataUrl = readImageAsDataUrl(expense.originalFilePath ?? null);
+    const dataUrl = await readImageAsDataUrl(expense, user);
     const details = [
       { text: expense.supplierName || 'Fornecedor não indicado', style: 'itemTitle' },
       {
@@ -97,6 +192,7 @@ export async function buildMonthlyReportPdf(
       content,
       styles: {
         title: { fontSize: 18, bold: true, margin: [0, 0, 0, 8] },
+        sectionTitle: { fontSize: 14, bold: true, margin: [0, 8, 0, 8] },
         subtitle: { fontSize: 11, color: '#555555' },
         itemTitle: { fontSize: 12, bold: true },
         itemMeta: { fontSize: 10, color: '#555555' },

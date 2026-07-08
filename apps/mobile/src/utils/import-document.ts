@@ -25,10 +25,25 @@ const SHARED_FILE_MIME_TYPES: Record<string, string> = {
   gif: 'image/gif',
 };
 
+// O iOS nem sempre entrega o ficheiro partilhado como file://... — o RN/expo
+// pode reescrever o caminho embrulhado no scheme da app (ex:
+// "invoicescanner://private/var/.../Inbox/fatura.pdf"). Normaliza ambos os
+// formatos para um URI file:// utilizável pelo fetch/FormData.
+export function normalizeSharedFileUrl(rawUrl: string): string | null {
+  if (rawUrl.startsWith('file://')) return rawUrl;
+  const wrapped = rawUrl.match(/^[a-z0-9.+-]+:\/\/(.+)$/i);
+  if (wrapped) return `file:///${wrapped[1].replace(/^\/+/, '')}`;
+  return null;
+}
+
 // Ficheiro entregue pelo iOS via share sheet / "Abrir em…" (CFBundleDocumentTypes
-// no app.json): chega como URL file:// para a Inbox da app, sem mimeType — é
-// inferido da extensão. Segue o mesmo fluxo do upload manual.
-export async function importSharedFile(fileUri: string): Promise<boolean> {
+// no app.json). Em vez de extrair aqui (que deixava o utilizador preso no ecrã
+// "Unmatched Route" do expo-router enquanto o upload corria), navega já para o
+// ecrã de validação — que mostra a pré-visualização e faz a extração ele
+// próprio, com o estado "A analisar a fatura…".
+export function importSharedFile(rawUrl: string): boolean {
+  const fileUri = normalizeSharedFileUrl(rawUrl);
+  if (!fileUri) return false;
   const name = decodeURIComponent(fileUri.split('/').pop() ?? '') || 'documento';
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const mimeType = SHARED_FILE_MIME_TYPES[ext];
@@ -36,7 +51,9 @@ export async function importSharedFile(fileUri: string): Promise<boolean> {
     notify('Ficheiro não suportado', 'Só é possível importar PDFs ou imagens (JPG/PNG).');
     return false;
   }
-  return importFileAsset({ uri: fileUri, name, mimeType });
+  setPendingCapture({ fileUri, fileMimeType: mimeType, source: 'UPLOAD', parsedQr: null });
+  router.replace('/validation');
+  return true;
 }
 
 async function importFileAsset(asset: { uri: string; name: string; mimeType?: string | null }): Promise<boolean> {
