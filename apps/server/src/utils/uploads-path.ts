@@ -73,7 +73,11 @@ function signExpenseFile(expenseId: string, expiresAt: number): string {
 
 export function signExpenseFileUrl(expenseId: string): string {
   const expiresAt = Date.now() + FILE_ACCESS_TTL_MS;
-  return `/expenses/${expenseId}/file?exp=${expiresAt}&sig=${signExpenseFile(expenseId, expiresAt)}`;
+  // SEM barra inicial, tal como o signUploadPath: o resolveFileUrl do cliente
+  // faz `${API_BASE_URL}/${fileUrl}` — com barra inicial gerava-se um URL com
+  // barra dupla (https://servidor//expenses/...) que o Express não faz match
+  // (404) e as imagens não carregavam na app.
+  return `expenses/${expenseId}/file?exp=${expiresAt}&sig=${signExpenseFile(expenseId, expiresAt)}`;
 }
 
 export function verifyExpenseFileSignature(expenseId: string, expiresAtRaw: string, sig: string): boolean {
