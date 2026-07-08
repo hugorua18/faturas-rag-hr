@@ -15,8 +15,20 @@ function resolveDevServerApiBaseUrl(): string | null {
   return `${isTunnel ? 'https' : 'http'}://${hostUri}/api`;
 }
 
+const PRODUCTION_API_URL = 'https://invoice-scanner-server.onrender.com';
+
 function resolveDefaultApiBaseUrl(): string {
-  if (Platform.OS === 'web') return 'http://localhost:4001';
+  if (Platform.OS === 'web') {
+    // Na Web o default depende de onde a página está a correr: em produção
+    // (invoice-scanner.expo.app) aponta para o servidor real. Antes, o default
+    // era sempre localhost e um `expo export` sem EXPO_PUBLIC_API_URL no
+    // ambiente cozia "localhost:4001" no bundle publicado — a webapp inteira
+    // ficava em "Failed to fetch". O hostname em runtime é à prova disso.
+    if (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      return PRODUCTION_API_URL;
+    }
+    return 'http://localhost:4001';
+  }
   return resolveDevServerApiBaseUrl() ?? 'http://localhost:4001';
 }
 
