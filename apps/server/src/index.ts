@@ -9,7 +9,7 @@ import { startGmailPolling } from './services/gmail-poller.service';
 import { prisma } from './db/prisma';
 import fs from 'node:fs';
 import { resolveSafeUploadPath, verifyUploadSignature, verifyExpenseFileSignature } from './utils/uploads-path';
-import { fetchDriveFileStream } from './services/drive.service';
+import { fetchDriveFileBuffer, detectFileMimeType } from './services/drive.service';
 
 const app = express();
 const port = Number(process.env.PORT) || 4001;
@@ -78,10 +78,10 @@ app.get('/expenses/:id/file', async (req, res) => {
     if (expense.driveFileId && expense.userId) {
       const user = await prisma.user.findUnique({ where: { id: expense.userId } });
       if (user?.googleRefreshTokenEnc) {
-        const { stream, mimeType } = await fetchDriveFileStream(user, expense.driveFileId);
-        res.setHeader('Content-Type', mimeType);
+        const buffer = await fetchDriveFileBuffer(user, expense.driveFileId);
+        res.setHeader('Content-Type', detectFileMimeType(buffer));
         res.setHeader('Cache-Control', 'private, max-age=300');
-        stream.pipe(res);
+        res.send(buffer);
         return;
       }
     }

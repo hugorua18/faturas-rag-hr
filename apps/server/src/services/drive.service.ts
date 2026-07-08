@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { google, type drive_v3 } from 'googleapis';
 import type { User } from '@prisma/client';
-import { NO_DATE_KEY } from '@invoice-scanner/shared';
+import { NO_DATE_KEY, NO_NIF_KEY } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { decryptRefreshToken } from './google-auth.service';
 import { resolveSafeUploadPath } from '../utils/uploads-path';
@@ -116,10 +116,13 @@ export async function uploadReportToDrive(
   extension: 'pdf' | 'xlsx',
 ): Promise<string> {
   const drive = getDriveClientForUser(user);
-  const year = period.slice(0, 4);
+  // Relatórios vivem DENTRO da pasta do próprio NIF (DespesasApp/<NIF>/Relatorios),
+  // ao lado das faturas desse NIF — tudo o que pertence a um NIF fica junto,
+  // pronto a entregar ao contabilista de uma vez.
+  const nifFolder = acquirerNif === NO_NIF_KEY ? 'Sem NIF' : acquirerNif;
   const folderId = await ensureFolderPath(
     drive,
-    ['DespesasApp', 'Relatorios', year, `NIF_${acquirerNif}`],
+    ['DespesasApp', nifFolder, 'Relatorios'],
     user.driveRootFolderId,
   );
   const filename = `Relatorio_${period}.${extension}`;
@@ -137,27 +140,29 @@ export async function uploadReportToDrive(
 
 // Lê de volta um ficheiro arquivado no Drive — usado quando o ficheiro local
 // já não existe (o disco do Render free é efémero: cada deploy limpa uploads/;
-// a cópia durável é a do Drive).
-export async function fetchDriveFileStream(
-  user: { googleRefreshTokenEnc: string | null; googleAuthClientId: string | null },
-  driveFileId: string,
-): Promise<{ stream: Readable; mimeType: string }> {
-  const drive = getDriveClientForUser(user);
-  const response = await drive.files.get({ fileId: driveFileId, alt: 'media' }, { responseType: 'stream' });
-  const mimeType = (response.headers as Record<string, string>)['content-type'] ?? 'application/octet-stream';
-  return { stream: response.data as unknown as Readable, mimeType };
-}
-
+// a cópia durável é a do Drive). responseType 'arraybuffer' de propósito, NÃO
+// 'stream': o gaxios moderno devolve streams WHATWG (sem .pipe()), o que fazia
+// a rota /expenses/:id/file rebentar — o relatório (que iterava o stream)
+// funcionava e a app (que fazia .pipe) mostrava a imagem em branco.
 export async function fetchDriveFileBuffer(
   user: { googleRefreshTokenEnc: string | null; googleAuthClientId: string | null },
   driveFileId: string,
 ): Promise<Buffer> {
-  const { stream } = await fetchDriveFileStream(user, driveFileId);
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const drive = getDriveClientForUser(user);
+  const response = await drive.files.get({ fileId: driveFileId, alt: 'media' }, { responseType: 'arraybuffer' });
+  return Buffer.from(response.data as ArrayBuffer);
+}
+
+// Content-Type pelos bytes (magic numbers) — os headers do Drive não são
+// fiáveis entre versões do cliente e a app precisa do tipo certo para
+// renderizar a imagem/PDF.
+export function detectFileMimeType(buffer: Buffer): string {
+  if (buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return 'image/png';
   }
-  return Buffer.concat(chunks);
+  if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length > 4 && buffer.subarray(0, 4).toString('latin1') === '%PDF') return 'application/pdf';
+  return 'image/jpeg';
 }
 
 function mimeTypeForFilePath(filePath: string): string {
