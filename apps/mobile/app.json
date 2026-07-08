@@ -5,13 +5,30 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": ["invoicescanner", "com.googleusercontent.apps.204121416132-im7f3lm1rssfdqjo7oa27al5mcgb67cq"],
+    "scheme": [
+      "invoicescanner",
+      "com.googleusercontent.apps.204121416132-im7f3lm1rssfdqjo7oa27al5mcgb67cq"
+    ],
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.hugorua.invoicescanner",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "LSSupportsOpeningDocumentsInPlace": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Fatura (PDF ou imagem)",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "com.adobe.pdf",
+              "public.png",
+              "public.jpeg",
+              "public.image"
+            ]
+          }
+        ]
       }
     },
     "android": {

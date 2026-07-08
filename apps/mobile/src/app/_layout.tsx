@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, router } from 'expo-router';
+import * as Linking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -8,6 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useTheme } from '@/hooks/use-theme';
 import { API_BASE_URL } from '@/api/config';
 import { getSessionToken } from '@/state/session';
+import { importSharedFile } from '@/utils/import-document';
 
 SplashScreen.preventAutoHideAsync();
 SplashScreen.hideAsync();
@@ -33,6 +35,20 @@ export default function RootLayout() {
   // parecia a app congelada).
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`).catch(() => {});
+  }, []);
+
+  // Ficheiros partilhados de outras apps (share sheet / "Abrir em…"): o iOS
+  // copia o ficheiro para a Inbox da app e abre-a com um URL file:// — que o
+  // expo-router não reconhece como rota, por isso é tratado aqui e segue o
+  // mesmo fluxo do upload manual (extração → validação).
+  useEffect(() => {
+    const handleUrl = (url: string | null) => {
+      if (!url || !url.startsWith('file://')) return;
+      void importSharedFile(url);
+    };
+    Linking.getInitialURL().then(handleUrl).catch(() => {});
+    const subscription = Linking.addEventListener('url', (event) => handleUrl(event.url));
+    return () => subscription.remove();
   }, []);
 
   return (
