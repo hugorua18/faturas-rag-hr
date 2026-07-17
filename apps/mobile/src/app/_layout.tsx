@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, router } from 'expo-router';
+import { Stack, router, usePathname } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme } from 'react-native';
@@ -22,11 +22,17 @@ export default function RootLayout() {
   // renderizar, confirma que há um token guardado; caso contrário manda para
   // o login. Não é uma reestruturação em grupos de rotas (auth)/(app), só um
   // efeito de nível de topo, suficiente para esta fase.
+  const pathname = usePathname();
   useEffect(() => {
+    // /privacidade é público (Privacy Policy URL exigida pela App Store) —
+    // um visitante sem sessão, incluindo o revisor da Apple, tem de conseguir
+    // abri-la sem ser empurrado para o login.
+    if (pathname === '/privacidade') return;
     getSessionToken().then((token) => {
       if (!token) router.replace('/login');
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   // O plano free do Render adormece o servidor ao fim de ~15 min de
   // inatividade — este ping fire-and-forget acorda-o logo ao abrir a app,
