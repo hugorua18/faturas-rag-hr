@@ -38,6 +38,21 @@ authRouter.post('/google/callback', async (req, res) => {
       return;
     }
 
+    // Allowlist de acesso: com ALLOWED_LOGIN_EMAILS definida (lista separada
+    // por vírgulas, no Render), só essas contas Google conseguem iniciar
+    // sessão — sem isto, qualquer pessoa que descobrisse a app podia entrar
+    // com a conta dela e usar o servidor. Sem a variável, mantém-se o
+    // comportamento aberto (evita lockout se a env ainda não estiver definida).
+    const allowedEmails = (process.env.ALLOWED_LOGIN_EMAILS ?? '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+    if (allowedEmails.length > 0 && !allowedEmails.includes(identity.email.toLowerCase())) {
+      console.warn(`[auth] login recusado para conta fora da allowlist: ${identity.email}`);
+      res.status(403).json({ error: 'Esta conta não tem acesso à aplicação' });
+      return;
+    }
+
     const existing = await prisma.user.findUnique({ where: { googleId: identity.sub } });
     // O Google só devolve refresh_token no primeiro consentimento — num
     // re-login normal não vem nenhum, e não podemos apagar um que já exista.
