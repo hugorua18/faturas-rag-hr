@@ -8,7 +8,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
 import { listAcquirerNifSummaries, logout } from '@/api/client';
 import { formatCurrency, formatNifLabel } from '@/utils/format';
-import { pickAndImportDocument } from '@/utils/import-document';
+import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
 import { confirmAction } from '@/utils/alert';
 import { PendingCountBadge } from '@/components/pending-count-badge';
 
@@ -32,15 +32,23 @@ export default function AcquirerNifListScreen() {
     }
   }
 
-  async function handleImportFile() {
+  async function runImport(importer: () => Promise<boolean>) {
     if (importing) return;
     setImporting(true);
     try {
-      const navigated = await pickAndImportDocument();
+      const navigated = await importer();
       if (navigated) setAddMenuOpen(false);
     } finally {
       setImporting(false);
     }
+  }
+
+  function handleImportFile() {
+    void runImport(pickAndImportDocument);
+  }
+
+  function handleImportFromGallery() {
+    void runImport(pickAndImportFromGallery);
   }
 
   function handleTakePhoto() {
@@ -115,6 +123,14 @@ export default function AcquirerNifListScreen() {
               <Text style={[styles.menuOptionText, { color: theme.text }]}>
                 {importing ? 'A processar…' : 'Adicionar ficheiro'}
               </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.menuOption, { backgroundColor: theme.backgroundElement }]}
+              onPress={handleImportFromGallery}
+              disabled={importing}
+            >
+              <Ionicons name="images-outline" size={20} color={theme.accent} />
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>Escolher da fototeca</Text>
             </Pressable>
             <Pressable
               style={[styles.menuOption, { backgroundColor: theme.backgroundElement }]}

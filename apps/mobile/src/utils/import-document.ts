@@ -1,4 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import { Image as RNImage } from 'react-native';
 import { router } from 'expo-router';
 
 import { extractDocument, resolveFileUrl } from '@/api/client';
@@ -14,6 +17,22 @@ export async function pickAndImportDocument(): Promise<boolean> {
   const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'image/*'] });
   if (result.canceled || !result.assets?.[0]) return false;
   return importFileAsset(result.assets[0]);
+}
+
+// Variante para a fototeca (expo-image-picker). No iOS 14+/Android 13+ usa o
+// seletor de fotos do sistema, que corre fora do processo — o utilizador não
+// precisa de conceder acesso a toda a fototeca (não há pedido de permissão em
+// bloco; a app só recebe as fotos escolhidas). quality<1 força a reconversão
+// para JPEG, o que também resolve fotos HEIC que o servidor não descodifica.
+export async function pickAndImportFromGallery(): Promise<boolean> {
+  const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
+  if (result.canceled || !result.assets?.[0]) return false;
+  const asset = result.assets[0];
+  return importFileAsset({
+    uri: asset.uri,
+    name: asset.fileName ?? 'fototeca.jpg',
+    mimeType: asset.mimeType ?? 'image/jpeg',
+  });
 }
 
 const SHARED_FILE_MIME_TYPES: Record<string, string> = {
@@ -56,12 +75,47 @@ export function importSharedFile(rawUrl: string): boolean {
   return true;
 }
 
+const UPLOAD_MAX_DIMENSION = 2000;
+
+function getImageSize(uri: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    RNImage.getSize(uri, (width, height) => resolve({ width, height }), reject);
+  });
+}
+
+// Fotos da galeria/ficheiros chegam em resolução total (12 MP ≈ 3–6 MB).
+// Reduzir para ≤2000px antes do upload corta o tempo de envio e o de
+// processamento no servidor sem perder legibilidade do talão — o QR e o OCR
+// trabalham abaixo dessa escala de qualquer forma. Também converte HEIC para
+// JPEG de caminho. Qualquer falha aqui é não-fatal: segue o ficheiro original.
+async function maybeDownscaleImageAsset(asset: {
+  uri: string;
+  name: string;
+  mimeType?: string | null;
+}): Promise<{ uri: string; name: string; mimeType?: string | null }> {
+  if (!asset.mimeType?.startsWith('image/')) return asset;
+  try {
+    const { width, height } = await getImageSize(asset.uri);
+    if (Math.max(width, height) <= UPLOAD_MAX_DIMENSION) return asset;
+    const resize = width >= height ? { width: UPLOAD_MAX_DIMENSION } : { height: UPLOAD_MAX_DIMENSION };
+    const result = await manipulateAsync(asset.uri, [{ resize }], { compress: 0.8, format: SaveFormat.JPEG });
+    return {
+      uri: result.uri,
+      name: `${asset.name.replace(/\.[a-z0-9]+$/i, '')}.jpg`,
+      mimeType: 'image/jpeg',
+    };
+  } catch {
+    return asset;
+  }
+}
+
 async function importFileAsset(asset: { uri: string; name: string; mimeType?: string | null }): Promise<boolean> {
   try {
+    const prepared = await maybeDownscaleImageAsset(asset);
     const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileUrl, fileMimeType } = await extractDocument({
-      uri: asset.uri,
-      name: asset.name,
-      mimeType: asset.mimeType ?? 'application/octet-stream',
+      uri: prepared.uri,
+      name: prepared.name,
+      mimeType: prepared.mimeType ?? 'application/octet-stream',
     });
     setPendingCapture({
       fileUri: fileUrl ? resolveFileUrl(fileUrl) : asset.uri,

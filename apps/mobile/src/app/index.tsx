@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -11,7 +11,7 @@ import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
 import { logout } from '@/api/client';
-import { pickAndImportDocument } from '@/utils/import-document';
+import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
 import { confirmAction } from '@/utils/alert';
 import { PendingCountBadge } from '@/components/pending-count-badge';
 
@@ -121,14 +121,29 @@ function CameraScreen() {
     }
   }
 
-  async function handleUploadDocument() {
+  async function runImport(importer: () => Promise<boolean>) {
     if (busy) return;
     setBusy(true);
     try {
-      await pickAndImportDocument();
+      await importer();
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleUploadDocument() {
+    if (busy) return;
+    // Na Web o <input type=file> do browser já dá acesso a fotos e ficheiros
+    // num só sítio; o Alert multi-botão do RN é no-op na Web (ver utils/alert).
+    if (Platform.OS === 'web') {
+      void runImport(pickAndImportDocument);
+      return;
+    }
+    Alert.alert('Adicionar fatura', 'De onde queres importar o documento?', [
+      { text: 'Fototeca', onPress: () => void runImport(pickAndImportFromGallery) },
+      { text: 'Ficheiros', onPress: () => void runImport(pickAndImportDocument) },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
   }
 
   function handleLogout() {

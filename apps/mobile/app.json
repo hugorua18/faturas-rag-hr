@@ -57,6 +57,12 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Esta app acede às fotos que escolheres para importar faturas."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",

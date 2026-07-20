@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { createCanvas, loadImage, DOMMatrix } from '@napi-rs/canvas';
+import { createCanvas, loadImage, DOMMatrix, type Image } from '@napi-rs/canvas';
 import jsQR from 'jsqr';
 import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
 import { extractTextViaOcr, heuristicFieldsFromOcrText, type OcrFields } from './ocr.service';
@@ -30,16 +30,40 @@ async function renderPdfFirstPageToPng(buffer: Buffer): Promise<Buffer> {
   return canvas.toBuffer('image/png');
 }
 
-// loadImage() do @napi-rs/canvas trata JPEG/PNG/etc. indiferentemente — não é
-// preciso normalizar o formato antes de decodificar o QR.
-async function decodeQrFromImageBuffer(imageBuffer: Buffer): Promise<string | null> {
-  const img = await loadImage(imageBuffer);
-  const canvas = createCanvas(img.width, img.height);
+// Larguras de varrimento do QR, da mais rápida para a mais lenta. O jsQR é
+// O(píxeis) e isto corre numa instância com CPU mínima (Render free): numa
+// foto de 12 MP demora vários segundos, mas o QR de uma fatura sobrevive bem
+// à redução — a ~900px decodifica na esmagadora maioria dos casos em dezenas
+// de milissegundos. Só se falhar é que se sobe a resolução; o último passo
+// fica limitado a 2600px porque um QR que ainda não decodificou a essa escala
+// está tipicamente desfocado, não subamostrado.
+const QR_SCAN_WIDTHS = [900, 1600, 2600];
+
+function scaleImageToCanvasData(img: Image, targetWidth: number) {
+  const width = Math.min(img.width, targetWidth);
+  const height = Math.max(1, Math.round((img.height * width) / img.width));
+  const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const result = jsQR(imageData.data as unknown as Uint8ClampedArray, imageData.width, imageData.height);
-  return result?.data ?? null;
+  ctx.drawImage(img, 0, 0, width, height);
+  return { canvas, width, height };
+}
+
+function decodeQrFromImage(img: Image): string | null {
+  const triedWidths = new Set<number>();
+  for (const targetWidth of QR_SCAN_WIDTHS) {
+    const effectiveWidth = Math.min(img.width, targetWidth);
+    if (triedWidths.has(effectiveWidth)) continue; // imagem pequena: escalas repetidas
+    triedWidths.add(effectiveWidth);
+    const { canvas, width, height } = scaleImageToCanvasData(img, targetWidth);
+    const imageData = canvas.getContext('2d').getImageData(0, 0, width, height);
+    // 'dontInvert': o QR das faturas é sempre escuro sobre claro; tentar
+    // também a inversão duplicaria o custo de cada passagem sem ganho real.
+    const result = jsQR(imageData.data as unknown as Uint8ClampedArray, width, height, {
+      inversionAttempts: 'dontInvert',
+    });
+    if (result?.data) return result.data;
+  }
+  return null;
 }
 
 export async function ingestDocument(buffer: Buffer, mimeType: string): Promise<IngestedDocument> {
@@ -56,14 +80,23 @@ export async function ingestDocument(buffer: Buffer, mimeType: string): Promise<
     throw new Error(`Tipo de ficheiro não suportado: ${mimeType}`);
   }
 
-  const qrText = await decodeQrFromImageBuffer(imageBuffer);
+  // A imagem é decodificada UMA vez e reutilizada pelo QR e pelo OCR — a
+  // decodificação de um JPEG de 12 MP não é grátis nesta instância.
+  const img = await loadImage(imageBuffer);
+  const qrText = decodeQrFromImage(img);
   const parsedQr = qrText ? parseInvoiceQr(qrText) : null;
 
   // OCR é só um fallback quando o QR falha — se já temos um resultado fiável
-  // do QR, não vale a pena gastar tempo/CPU a correr o Tesseract.
+  // do QR, não vale a pena gastar tempo/CPU a correr o Tesseract. O Tesseract
+  // também é O(píxeis): 2200px de largura já dá ~300dpi num talão típico;
+  // acima disso só acrescenta tempo, por isso o input é reduzido a essa escala
+  // (o ficheiro arquivado continua a ser o original).
   let ocrFields: IngestedDocument['ocrFields'] = null;
   if (!parsedQr) {
-    const ocrText = await extractTextViaOcr(imageBuffer);
+    const OCR_MAX_WIDTH = 2200;
+    const ocrInput =
+      img.width > OCR_MAX_WIDTH ? scaleImageToCanvasData(img, OCR_MAX_WIDTH).canvas.toBuffer('image/png') : imageBuffer;
+    const ocrText = await extractTextViaOcr(ocrInput);
     if (ocrText) {
       const fields = heuristicFieldsFromOcrText(ocrText);
       ocrFields = Object.keys(fields).length > 0 ? fields : null;
