@@ -287,3 +287,13 @@ export async function logout(): Promise<void> {
   await clearSessionToken();
   router.replace('/login');
 }
+
+// Eliminação de conta (App Store 5.1.1(v)): apaga no servidor a conta e todos
+// os dados do utilizador (despesas, sessões) e termina a sessão local. Os
+// ficheiros já arquivados no Google Drive do utilizador não são afetados.
+export async function deleteAccount(): Promise<void> {
+  const response = await apiFetch('/auth/account', { method: 'DELETE' });
+  if (!response.ok) throw new Error('Falha ao eliminar a conta');
+  await clearSessionToken();
+  router.replace('/login');
+}

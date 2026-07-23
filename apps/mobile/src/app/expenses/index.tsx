@@ -7,10 +7,10 @@ import type { AcquirerNifSummary } from '@invoice-scanner/shared';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
 import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
-import { listAcquirerNifSummaries, logout } from '@/api/client';
+import { listAcquirerNifSummaries } from '@/api/client';
 import { formatCurrency, formatNifLabel } from '@/utils/format';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
-import { confirmAction } from '@/utils/alert';
+import { showAccountMenu } from '@/utils/account-actions';
 import { PendingCountBadge } from '@/components/pending-count-badge';
 
 export default function AcquirerNifListScreen() {
@@ -60,9 +60,7 @@ export default function AcquirerNifListScreen() {
   }
 
   function handleLogout() {
-    confirmAction('Terminar sessão', 'Tens a certeza que queres sair da tua conta?', 'Terminar sessão', () => {
-      logout();
-    });
+    showAccountMenu();
   }
 
   useFocusEffect(

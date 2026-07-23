@@ -11,9 +11,8 @@ import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
 import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
-import { logout } from '@/api/client';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
-import { confirmAction } from '@/utils/alert';
+import { showAccountMenu } from '@/utils/account-actions';
 import { PendingCountBadge } from '@/components/pending-count-badge';
 
 const FRAME_SIZE = 260;
@@ -149,9 +148,7 @@ function CameraScreen() {
   }
 
   function handleLogout() {
-    confirmAction('Terminar sessão', 'Tens a certeza que queres sair da tua conta?', 'Terminar sessão', () => {
-      logout();
-    });
+    showAccountMenu();
   }
 
   const handleBarcodeScanned = useCallback(
@@ -193,8 +190,11 @@ function CameraScreen() {
         <Text style={[styles.permissionBody, { color: theme.textSecondary }]}>
           Precisamos da câmara para digitalizar o QR code das tuas faturas.
         </Text>
+        {/* "Continuar" e não "Permitir …": a App Store (5.1.1(iv)) exige texto
+            neutro no ecrã pré-permissão — a decisão de permitir pertence ao
+            diálogo do sistema, não a este botão. */}
         <Pressable style={[styles.primaryButton, { backgroundColor: theme.accent }]} onPress={requestPermission}>
-          <Text style={styles.primaryButtonText}>Permitir câmara</Text>
+          <Text style={styles.primaryButtonText}>Continuar</Text>
         </Pressable>
       </View>
     );

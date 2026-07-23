@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { Router } from 'express';
 import { prisma } from '../db/prisma';
 import { requireAuth } from '../middleware/require-auth';
+import { resolveSafeUploadPath } from '../utils/uploads-path';
 import { encryptRefreshToken, exchangeAuthCodeForTokens, verifyGoogleIdToken } from '../services/google-auth.service';
 
 export const authRouter = Router();
@@ -111,4 +113,39 @@ authRouter.post('/logout', requireAuth, async (req, res) => {
 
 authRouter.get('/me', requireAuth, async (req, res) => {
   res.json({ id: req.user!.id, email: req.user!.email });
+});
+
+// Eliminação de conta na própria app — exigência da App Store (guideline
+// 5.1.1(v)): apps com criação de conta têm de permitir eliminá-la sem passar
+// por apoio ao cliente. Apaga TODOS os dados do utilizador na nossa base
+// (despesas, sessões, a própria conta) e os ficheiros locais associados.
+// Os ficheiros já arquivados no Google Drive do utilizador não são tocados —
+// estão no Drive DELE, fora do nosso sistema; remover o acesso da app à conta
+// Google faz-se em myaccount.google.com/connections (dito na política de
+// privacidade).
+authRouter.delete('/account', requireAuth, async (req, res) => {
+  const userId = req.user!.id;
+  try {
+    const expenses = await prisma.expense.findMany({
+      where: { userId },
+      select: { originalFilePath: true },
+    });
+    for (const expense of expenses) {
+      const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+      if (!absolutePath) continue;
+      try {
+        fs.unlinkSync(absolutePath);
+      } catch {
+        // best-effort: o disco do Render é efémero, o ficheiro pode já não existir
+      }
+    }
+    await prisma.expense.deleteMany({ where: { userId } });
+    await prisma.session.deleteMany({ where: { userId } });
+    await prisma.user.delete({ where: { id: userId } });
+    console.log(`[auth] conta eliminada: ${req.user!.email}`);
+    res.status(204).send();
+  } catch (err) {
+    console.error(`[auth] falha ao eliminar a conta ${req.user!.email}`, err);
+    res.status(500).json({ error: 'Falha ao eliminar a conta' });
+  }
 });
