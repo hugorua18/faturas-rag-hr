@@ -6,6 +6,7 @@ import { suppliersRouter } from './routes/suppliers';
 import { authRouter } from './routes/auth';
 import { requireAuth } from './middleware/require-auth';
 import { startGmailPolling } from './services/gmail-poller.service';
+import { startSheetsExport } from './services/sheets-export.service';
 import { prisma } from './db/prisma';
 import fs from 'node:fs';
 import { resolveSafeUploadPath, verifyUploadSignature, verifyExpenseFileSignature } from './utils/uploads-path';
@@ -121,4 +122,5 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(port, () => {
   console.log(`[server] a correr em http://localhost:${port}`);
   startGmailPolling();
+  startSheetsExport();
 });

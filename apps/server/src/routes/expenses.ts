@@ -8,6 +8,7 @@ import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
 import { archiveInvoiceToDriveBestEffort } from '../services/drive.service';
+import { scheduleSheetsSyncSoon } from '../services/sheets-export.service';
 import { triggerPoll } from '../services/gmail-poller.service';
 import { uploadsDir, resolveSafeUploadPath, signUploadPath, signExpenseFileUrl } from '../utils/uploads-path';
 
@@ -286,6 +287,7 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
   });
 
   archiveInvoiceToDriveBestEffort(req.user!, expense);
+  scheduleSheetsSyncSoon(req.user!.id);
 
   res.status(201).json(toExpenseJson(expense));
 });
@@ -341,6 +343,7 @@ expensesRouter.patch('/:id', async (req, res) => {
     if (expense.status === 'SUBMETIDA' && !expense.driveFileId) {
       archiveInvoiceToDriveBestEffort(req.user!, expense);
     }
+    scheduleSheetsSyncSoon(req.user!.id);
     res.json(toExpenseJson(expense));
   } catch {
     res.status(404).json({ error: 'Despesa não encontrada' });
@@ -356,6 +359,7 @@ expensesRouter.delete('/:id', async (req, res) => {
     }
     const expense = await prisma.expense.delete({ where: { id: req.params.id } });
     deleteUploadedFile(expense.originalFilePath);
+    scheduleSheetsSyncSoon(req.user!.id);
     res.status(204).send();
   } catch {
     res.status(404).json({ error: 'Despesa não encontrada' });

@@ -5,6 +5,7 @@ import { google, type gmail_v1 } from 'googleapis';
 import type { User } from '@prisma/client';
 import { ingestDocument } from './document-ingest.service';
 import { archiveInvoiceToDriveBestEffort } from './drive.service';
+import { scheduleSheetsSyncSoon } from './sheets-export.service';
 import { prisma } from '../db/prisma';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -183,6 +184,7 @@ export async function poll(): Promise<void> {
   // A lista do Gmail é paginada (100 por página) — sem o ciclo de pageToken,
   // caixas com mais de 100 mensagens na janela de pesquisa perdiam as restantes.
   let pageToken: string | undefined;
+  let processedAny = false;
   do {
     const { data } = await gmail.users.messages.list({ userId: 'me', q: SEARCH_QUERY, pageToken });
     for (const { id } of data.messages ?? []) {
@@ -190,9 +192,13 @@ export async function poll(): Promise<void> {
       const alreadyProcessed = await prisma.processedEmail.findUnique({ where: { gmailMessageId: id } });
       if (alreadyProcessed) continue;
       await processMessage(gmail, id, user);
+      processedAny = true;
     }
     pageToken = data.nextPageToken ?? undefined;
   } while (pageToken);
+
+  // Novas despesas de email → refletir no registo Google Sheets do dono.
+  if (processedAny) scheduleSheetsSyncSoon(user.id);
 }
 
 // Nunca deixar dois polls correr em simultâneo (o do intervalo + um pedido
