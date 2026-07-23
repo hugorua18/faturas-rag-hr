@@ -17,6 +17,36 @@ WebBrowser.maybeCompleteAuthSession();
 
 const SCOPES = ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'];
 
+// ---- Fluxo Web por redirect (sem popup) -----------------------------------
+// O fluxo por popup (promptAsync) tornou-se pouco fiável na Web: consoante o
+// browser/bloqueador de popups, a autenticação abre numa janela nova SEM
+// window.opener e o resultado nunca chega à janela original — o utilizador
+// escolhe a conta e "volta ao ecrã de login" sem erro visível. Em vez disso,
+// a Web navega para o Google NA PRÓPRIA janela: o par PKCE fica em
+// localStorage e, no regresso com ?code=..., a troca completa-se aqui.
+const WEB_LOGIN_REQUEST_KEY = 'invoice-scanner.web-login-request';
+const WEB_LOGIN_RETURN_KEY = 'invoice-scanner.web-login-return';
+// Erros da troca do código sobrevivem a remontagens do ecrã (o estado React
+// perde-se; localStorage não) — sem isto, uma falha do servidor (ex.: conta
+// fora da allowlist) podia voltar ao ecrã de login sem explicação nenhuma.
+const WEB_LOGIN_ERROR_KEY = 'invoice-scanner.web-login-error';
+
+// Captura o retorno OAuth no arranque do bundle, ANTES de qualquer redirect
+// do expo-router (index → /expenses, guard → /login) poder apagar a query
+// string — o ?code pode aterrar na raiz ou em /login, conforme o redirect URI
+// registado no Google. Correr isto em module scope é o mesmo mecanismo de que
+// o maybeCompleteAuthSession() acima depende.
+if (
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.location.search.includes('code=') &&
+  window.localStorage.getItem(WEB_LOGIN_REQUEST_KEY)
+) {
+  window.localStorage.setItem(WEB_LOGIN_RETURN_KEY, window.location.search);
+  window.history.replaceState(null, '', window.location.pathname);
+}
+// ---------------------------------------------------------------------------
+
 function resolveClientId(): string {
   // Client id iOS (sem secret) para builds nativas; web/dev client como
   // fallback para Expo Go / dev client / Web, onde o fluxo passa por browser.
@@ -74,6 +104,50 @@ export default function LoginScreen() {
     discovery,
   );
 
+  // Regresso do redirect Web: o module scope acima guardou a query string em
+  // localStorage antes de os redirects do router a apagarem — retoma daqui.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const returnSearch = window.localStorage.getItem(WEB_LOGIN_RETURN_KEY);
+    if (!returnSearch) {
+      // Sem regresso OAuth pendente: repõe um erro de uma tentativa anterior
+      // que uma remontagem do ecrã possa ter apagado.
+      const storedError = window.localStorage.getItem(WEB_LOGIN_ERROR_KEY);
+      if (storedError) {
+        window.localStorage.removeItem(WEB_LOGIN_ERROR_KEY);
+        setError(storedError);
+      }
+      return;
+    }
+    window.localStorage.removeItem(WEB_LOGIN_RETURN_KEY);
+
+    const params = new URLSearchParams(returnSearch);
+    const code = params.get('code');
+    const state = params.get('state');
+    const storedRaw = window.localStorage.getItem(WEB_LOGIN_REQUEST_KEY);
+    window.localStorage.removeItem(WEB_LOGIN_REQUEST_KEY);
+
+    if (params.get('error') || !code) {
+      setError('Falha na autenticação com o Google. Tenta novamente.');
+      return;
+    }
+    if (!storedRaw) {
+      setError('O pedido de autenticação expirou. Tenta novamente.');
+      return;
+    }
+    try {
+      const stored = JSON.parse(storedRaw) as { codeVerifier?: string; state?: string; redirectUri?: string };
+      if (!stored.state || stored.state !== state) {
+        setError('O pedido de autenticação não corresponde (state inválido). Tenta novamente.');
+        return;
+      }
+      void completeLogin(code, stored.codeVerifier, stored.redirectUri);
+    } catch {
+      setError('Falha ao retomar o início de sessão. Tenta novamente.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!response) return;
 
@@ -97,14 +171,46 @@ export default function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [response]);
 
-  async function completeLogin(code: string, codeVerifier: string | undefined): Promise<void> {
+  // Inicia o fluxo adequado à plataforma: Web navega para o Google na própria
+  // janela (ver comentário do WEB_LOGIN_REQUEST_KEY); nativo usa promptAsync.
+  async function startLogin(): Promise<void> {
+    if (Platform.OS !== 'web') {
+      void promptAsync();
+      return;
+    }
+    if (!discovery) return;
+    const webRequest = new AuthSession.AuthRequest({
+      clientId: resolveClientId(),
+      scopes: SCOPES,
+      redirectUri,
+      responseType: 'code',
+      extraParams: { access_type: 'offline', prompt: 'select_account' },
+    });
+    const authUrl = await webRequest.makeAuthUrlAsync(discovery);
+    window.localStorage.setItem(
+      WEB_LOGIN_REQUEST_KEY,
+      JSON.stringify({ codeVerifier: webRequest.codeVerifier, state: webRequest.state, redirectUri }),
+    );
+    window.location.assign(authUrl);
+  }
+
+  async function completeLogin(
+    code: string,
+    codeVerifier: string | undefined,
+    redirectUriUsed?: string,
+  ): Promise<void> {
     setSubmitting(true);
     setError(null);
     try {
       const res = await fetch(`${API_BASE_URL}/auth/google/callback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, redirectUri, codeVerifier, clientId: resolveClientId() }),
+        body: JSON.stringify({
+          code,
+          redirectUri: redirectUriUsed ?? redirectUri,
+          codeVerifier,
+          clientId: resolveClientId(),
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -115,8 +221,13 @@ export default function LoginScreen() {
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/');
     } catch (err) {
-      if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setError(err instanceof Error ? err.message : 'Falha ao iniciar sessão');
+      const message = err instanceof Error ? err.message : 'Falha ao iniciar sessão';
+      if (Platform.OS === 'web') {
+        window.localStorage.setItem(WEB_LOGIN_ERROR_KEY, message);
+      } else {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
+      setError(message);
     } finally {
       setSubmitting(false);
     }
@@ -140,7 +251,7 @@ export default function LoginScreen() {
           disabled={!request || submitting}
           onPress={() => {
             if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            promptAsync();
+            void startLogin();
           }}
         >
           {submitting ? (

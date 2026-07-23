@@ -24,6 +24,10 @@ authRouter.post('/google/callback', async (req, res) => {
     res.status(400).json({ error: 'code e redirectUri são obrigatórios' });
     return;
   }
+  // Diagnóstico: sem esta linha, um login BEM-sucedido não deixava rasto
+  // nenhum nos logs, tornando impossível distinguir "o pedido nunca chegou"
+  // de "chegou e correu bem" ao investigar problemas de login.
+  console.log(`[auth] callback google recebido (redirectUri=${redirectUri})`);
 
   try {
     const { idToken, refreshToken, usedClientId } = await exchangeAuthCodeForTokens(
@@ -88,6 +92,7 @@ authRouter.post('/google/callback', async (req, res) => {
       },
     });
 
+    console.log(`[auth] sessão iniciada: ${user.email}`);
     res.json({ sessionToken, user: { id: user.id, email: user.email } });
   } catch (err) {
     console.error('[auth] falha no login com Google', err);

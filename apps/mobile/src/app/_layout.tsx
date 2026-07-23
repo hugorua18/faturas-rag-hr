@@ -26,8 +26,11 @@ export default function RootLayout() {
   useEffect(() => {
     // /privacidade é público (Privacy Policy URL exigida pela App Store) —
     // um visitante sem sessão, incluindo o revisor da Apple, tem de conseguir
-    // abri-la sem ser empurrado para o login.
-    if (pathname === '/privacidade') return;
+    // abri-la sem ser empurrado para o login. /login também fica de fora:
+    // replace('/login') com o login já montado REMONTA o ecrã a meio da troca
+    // do código OAuth (a sessão ainda não existe nesse instante), apagando o
+    // spinner e a mensagem de erro — o login parecia "voltar ao início" mudo.
+    if (pathname === '/privacidade' || pathname === '/login') return;
     getSessionToken().then((token) => {
       if (!token) router.replace('/login');
     });

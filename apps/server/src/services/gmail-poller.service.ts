@@ -72,6 +72,19 @@ function getGmailClient(): gmail_v1.Gmail | null {
 // é o da própria caixa monitorizada; senão, se a app só tem um utilizador
 // (é single-user por desenho), é ele.
 async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
+  // Dono explícito da caixa de ingestão (INGEST_OWNER_EMAIL no Render). Com a
+  // app aberta a várias contas Google, as faturas que chegam à caixa partilhada
+  // têm de ir para um dono determinado — sem isto, ou a ingestão parava (2+
+  // utilizadores → null no fallback abaixo) ou ia parar a quem fizesse login
+  // com a própria conta da caixa (ex.: o revisor da Apple com a conta demo).
+  const ownerEmail = process.env.INGEST_OWNER_EMAIL?.trim().toLowerCase();
+  if (ownerEmail) {
+    const owner = await prisma.user.findFirst({ where: { email: { equals: ownerEmail, mode: 'insensitive' } } });
+    if (owner) return owner;
+    console.warn(`[gmail-poller] INGEST_OWNER_EMAIL=${ownerEmail} ainda não tem conta na app — faturas de email em espera.`);
+    return null;
+  }
+
   try {
     const { data } = await gmail.users.getProfile({ userId: 'me' });
     if (data.emailAddress) {
