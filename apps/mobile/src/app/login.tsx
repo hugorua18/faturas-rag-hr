@@ -10,6 +10,12 @@ import { useTheme } from '@/hooks/use-theme';
 import { MaxContentWidth } from '@/constants/theme';
 import { API_BASE_URL, GOOGLE_SIGNIN_CLIENT_ID_IOS, GOOGLE_SIGNIN_CLIENT_ID_WEB } from '@/api/config';
 import { setSessionToken } from '@/state/session';
+import {
+  captureWebLoginReturn,
+  WEB_LOGIN_ERROR_KEY,
+  WEB_LOGIN_REQUEST_KEY,
+  WEB_LOGIN_RETURN_KEY,
+} from '@/utils/web-login-return';
 
 // Necessário para fechar o popup/browser de autenticação corretamente
 // (sobretudo na Web) quando o redirect volta para a app.
@@ -23,29 +29,9 @@ const SCOPES = ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/d
 // window.opener e o resultado nunca chega à janela original — o utilizador
 // escolhe a conta e "volta ao ecrã de login" sem erro visível. Em vez disso,
 // a Web navega para o Google NA PRÓPRIA janela: o par PKCE fica em
-// localStorage e, no regresso com ?code=..., a troca completa-se aqui.
-const WEB_LOGIN_REQUEST_KEY = 'invoice-scanner.web-login-request';
-const WEB_LOGIN_RETURN_KEY = 'invoice-scanner.web-login-return';
-// Erros da troca do código sobrevivem a remontagens do ecrã (o estado React
-// perde-se; localStorage não) — sem isto, uma falha do servidor (ex.: conta
-// fora da allowlist) podia voltar ao ecrã de login sem explicação nenhuma.
-const WEB_LOGIN_ERROR_KEY = 'invoice-scanner.web-login-error';
-
-// Captura o retorno OAuth no arranque do bundle, ANTES de qualquer redirect
-// do expo-router (index → /expenses, guard → /login) poder apagar a query
-// string — o ?code pode aterrar na raiz ou em /login, conforme o redirect URI
-// registado no Google. Correr isto em module scope é o mesmo mecanismo de que
-// o maybeCompleteAuthSession() acima depende.
-if (
-  Platform.OS === 'web' &&
-  typeof window !== 'undefined' &&
-  window.location.search.includes('code=') &&
-  window.localStorage.getItem(WEB_LOGIN_REQUEST_KEY)
-) {
-  window.localStorage.setItem(WEB_LOGIN_RETURN_KEY, window.location.search);
-  window.history.replaceState(null, '', window.location.pathname);
-}
-// ---------------------------------------------------------------------------
+// localStorage e, no regresso com ?code=..., a troca completa-se aqui. A
+// captura do ?code vive em web-login-return.ts, importado (com efeito) pelo
+// _layout — este módulo de rota só executa quando /login monta, tarde demais.
 
 function resolveClientId(): string {
   // Client id iOS (sem secret) para builds nativas; web/dev client como
@@ -108,6 +94,9 @@ export default function LoginScreen() {
   // localStorage antes de os redirects do router a apagarem — retoma daqui.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
+    // Rede de segurança: se por alguma razão a captura do arranque não correu
+    // e o ?code ainda está no URL, captura-o agora (é idempotente).
+    captureWebLoginReturn();
     const returnSearch = window.localStorage.getItem(WEB_LOGIN_RETURN_KEY);
     if (!returnSearch) {
       // Sem regresso OAuth pendente: repõe um erro de uma tentativa anterior

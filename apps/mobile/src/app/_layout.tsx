@@ -10,6 +10,11 @@ import { useTheme } from '@/hooks/use-theme';
 import { API_BASE_URL } from '@/api/config';
 import { getSessionToken } from '@/state/session';
 import { importSharedFile } from '@/utils/import-document';
+// Import com efeito: captura o ?code=... do regresso OAuth Web no arranque,
+// antes de o router (index/guard) apagar a query string — ver o comentário
+// no próprio módulo. O módulo do ecrã /login só executa quando a rota monta,
+// tarde demais para esta captura.
+import '@/utils/web-login-return';
 
 SplashScreen.preventAutoHideAsync();
 SplashScreen.hideAsync();

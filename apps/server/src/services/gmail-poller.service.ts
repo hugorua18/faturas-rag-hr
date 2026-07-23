@@ -98,12 +98,39 @@ async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
   return users.length === 1 ? users[0] : null;
 }
 
+// Email do remetente a partir do cabeçalho "From" (`"Nome" <endereco@x>` ou
+// só `endereco@x`).
+function senderEmailFromMessage(message: gmail_v1.Schema$Message): string | null {
+  const fromHeader = message.payload?.headers?.find((h) => h.name?.toLowerCase() === 'from')?.value;
+  if (!fromHeader) return null;
+  const bracketed = fromHeader.match(/<([^>]+)>/);
+  const email = (bracketed ? bracketed[1] : fromHeader).trim().toLowerCase();
+  return email.includes('@') ? email : null;
+}
+
 // Devolve true se a mensagem ficou completamente processada. Falhas num anexo
 // deixam a mensagem POR marcar (retry no próximo poll) — antes, a mensagem era
 // marcada como processada mesmo com anexos falhados, perdendo a fatura para
 // sempre (ex: falha transitória de rede ou do processamento do PDF).
-async function processMessage(gmail: gmail_v1.Gmail, messageId: string, user: User): Promise<boolean> {
+async function processMessage(gmail: gmail_v1.Gmail, messageId: string, fallbackUser: User): Promise<boolean> {
   const { data: message } = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
+
+  // Encaminhamento por remetente: quem reencaminha uma fatura a partir do
+  // email com que entra na app recebe-a na SUA conta (e o arquivo vai para o
+  // Drive DELE). Tudo o resto — fornecedores a enviar diretamente para a
+  // caixa, remetentes desconhecidos — vai para o dono de reserva
+  // (INGEST_OWNER_EMAIL / resolveIngestUser).
+  let user = fallbackUser;
+  const senderEmail = senderEmailFromMessage(message);
+  if (senderEmail && senderEmail !== fallbackUser.email.toLowerCase()) {
+    const senderUser = await prisma.user.findFirst({
+      where: { email: { equals: senderEmail, mode: 'insensitive' } },
+    });
+    if (senderUser) {
+      user = senderUser;
+      console.log(`[gmail-poller] mensagem ${messageId} atribuída a ${senderUser.email} (remetente)`);
+    }
+  }
 
   const attachmentParts: AttachmentPart[] = [];
   collectAttachmentParts(message.payload, attachmentParts);
