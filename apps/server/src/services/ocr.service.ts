@@ -12,11 +12,41 @@ const execFileAsync = promisify(execFile);
 // é uma condição esperada (ex: ambiente sem Docker), não um erro por pedido.
 let hasWarnedMissingTesseract = false;
 
+// Faturas de viagem vêm em várias línguas — o OCR tenta todas estas. A lista
+// efetiva é a INTERSEÇÃO com os pacotes instalados (tesseract rebenta se lhe
+// pedirem uma língua sem dados de treino), resolvida uma vez e reutilizada.
+const WANTED_OCR_LANGUAGES = ['por', 'spa', 'fra', 'deu', 'ita'];
+let cachedOcrLanguages: string | null = null;
+
+async function resolveOcrLanguages(): Promise<string> {
+  if (cachedOcrLanguages !== null) return cachedOcrLanguages;
+  try {
+    const { stdout } = await execFileAsync('tesseract', ['--list-langs']);
+    const installed = new Set(
+      stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => /^[a-z_]{3,}$/i.test(line)),
+    );
+    const usable = WANTED_OCR_LANGUAGES.filter((lang) => installed.has(lang));
+    cachedOcrLanguages = usable.length > 0 ? usable.join('+') : 'por';
+    if (usable.length < WANTED_OCR_LANGUAGES.length) {
+      console.warn(
+        `[ocr] línguas em falta (${WANTED_OCR_LANGUAGES.filter((l) => !installed.has(l)).join(', ')}) — a usar: ${cachedOcrLanguages}`,
+      );
+    }
+  } catch {
+    cachedOcrLanguages = 'por'; // sem --list-langs, o comportamento antigo
+  }
+  return cachedOcrLanguages;
+}
+
 export async function extractTextViaOcr(imageBuffer: Buffer): Promise<string | null> {
   const tempFilePath = path.join(os.tmpdir(), `${crypto.randomUUID()}.png`);
   try {
     await fs.writeFile(tempFilePath, imageBuffer);
-    const { stdout } = await execFileAsync('tesseract', [tempFilePath, 'stdout', '-l', 'por']);
+    const languages = await resolveOcrLanguages();
+    const { stdout } = await execFileAsync('tesseract', [tempFilePath, 'stdout', '-l', languages]);
     return stdout;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {

@@ -5,9 +5,11 @@ FROM node:22-bookworm-slim AS base
 # Node 20, só a partir do Node 22 (V8 12.1+). Sem isto, a renderização da
 # página falha silenciosamente ("ignoring errors during GetOperatorList") e
 # a imagem/QR extraídos ficam em branco, mesmo sem nenhum erro visível na resposta.
-# tesseract-ocr-por: dados de treino em português — necessário para o fallback
-# OCR (ver ocr.service.ts, que corre "tesseract ... -l por").
-RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-por \
+# Dados de treino do OCR: português + as línguas das faturas de viagem
+# (espanhol, francês, alemão, italiano) — o ocr.service.ts interseta esta
+# lista com as línguas instaladas antes de invocar o tesseract.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
+    tesseract-ocr-por tesseract-ocr-spa tesseract-ocr-fra tesseract-ocr-deu tesseract-ocr-ita \
     && rm -rf /var/lib/apt/lists/*
 
 # "corepack enable" por si só não fixa a versão — isso vem do campo
