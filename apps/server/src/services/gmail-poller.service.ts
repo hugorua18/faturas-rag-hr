@@ -71,20 +71,11 @@ function getGmailClient(): gmail_v1.Gmail | null {
 // apareciam na fila "Tratamento manual"). Preferência: o utilizador cujo email
 // é o da própria caixa monitorizada; senão, se a app só tem um utilizador
 // (é single-user por desenho), é ele.
+// A funcionalidade de email pertence ao utilizador da própria caixa
+// monitorizada (faturas.rag.hr@gmail.com): TODAS as faturas recebidas lá
+// aparecem na fila de tratamento manual dessa conta — os restantes
+// utilizadores da app não têm ingestão por email (o UI esconde-lhes a opção).
 async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
-  // Dono explícito da caixa de ingestão (INGEST_OWNER_EMAIL no Render). Com a
-  // app aberta a várias contas Google, as faturas que chegam à caixa partilhada
-  // têm de ir para um dono determinado — sem isto, ou a ingestão parava (2+
-  // utilizadores → null no fallback abaixo) ou ia parar a quem fizesse login
-  // com a própria conta da caixa (ex.: o revisor da Apple com a conta demo).
-  const ownerEmail = process.env.INGEST_OWNER_EMAIL?.trim().toLowerCase();
-  if (ownerEmail) {
-    const owner = await prisma.user.findFirst({ where: { email: { equals: ownerEmail, mode: 'insensitive' } } });
-    if (owner) return owner;
-    console.warn(`[gmail-poller] INGEST_OWNER_EMAIL=${ownerEmail} ainda não tem conta na app — faturas de email em espera.`);
-    return null;
-  }
-
   try {
     const { data } = await gmail.users.getProfile({ userId: 'me' });
     if (data.emailAddress) {
@@ -98,39 +89,12 @@ async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
   return users.length === 1 ? users[0] : null;
 }
 
-// Email do remetente a partir do cabeçalho "From" (`"Nome" <endereco@x>` ou
-// só `endereco@x`).
-function senderEmailFromMessage(message: gmail_v1.Schema$Message): string | null {
-  const fromHeader = message.payload?.headers?.find((h) => h.name?.toLowerCase() === 'from')?.value;
-  if (!fromHeader) return null;
-  const bracketed = fromHeader.match(/<([^>]+)>/);
-  const email = (bracketed ? bracketed[1] : fromHeader).trim().toLowerCase();
-  return email.includes('@') ? email : null;
-}
-
 // Devolve true se a mensagem ficou completamente processada. Falhas num anexo
 // deixam a mensagem POR marcar (retry no próximo poll) — antes, a mensagem era
 // marcada como processada mesmo com anexos falhados, perdendo a fatura para
 // sempre (ex: falha transitória de rede ou do processamento do PDF).
-async function processMessage(gmail: gmail_v1.Gmail, messageId: string, fallbackUser: User): Promise<boolean> {
+async function processMessage(gmail: gmail_v1.Gmail, messageId: string, user: User): Promise<boolean> {
   const { data: message } = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
-
-  // Encaminhamento por remetente: quem reencaminha uma fatura a partir do
-  // email com que entra na app recebe-a na SUA conta (e o arquivo vai para o
-  // Drive DELE). Tudo o resto — fornecedores a enviar diretamente para a
-  // caixa, remetentes desconhecidos — vai para o dono de reserva
-  // (INGEST_OWNER_EMAIL / resolveIngestUser).
-  let user = fallbackUser;
-  const senderEmail = senderEmailFromMessage(message);
-  if (senderEmail && senderEmail !== fallbackUser.email.toLowerCase()) {
-    const senderUser = await prisma.user.findFirst({
-      where: { email: { equals: senderEmail, mode: 'insensitive' } },
-    });
-    if (senderUser) {
-      user = senderUser;
-      console.log(`[gmail-poller] mensagem ${messageId} atribuída a ${senderUser.email} (remetente)`);
-    }
-  }
 
   const attachmentParts: AttachmentPart[] = [];
   collectAttachmentParts(message.payload, attachmentParts);

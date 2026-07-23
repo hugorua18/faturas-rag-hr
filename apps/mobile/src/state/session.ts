@@ -40,9 +40,36 @@ export async function setSessionToken(token: string): Promise<void> {
 
 export async function clearSessionToken(): Promise<void> {
   cachedToken = null;
+  cachedEmail = null;
   if (Platform.OS === 'web') {
     window.localStorage.removeItem(SESSION_TOKEN_KEY);
+    window.localStorage.removeItem(SESSION_EMAIL_KEY);
   } else {
     await SecureStore.deleteItemAsync(SESSION_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(SESSION_EMAIL_KEY);
+  }
+}
+
+// Email da conta com sessão iniciada — usado para mostrar/esconder
+// funcionalidades por utilizador (ex.: a fila de email é exclusiva da conta
+// da caixa de ingestão). Segue o mesmo esquema de storage do token.
+const SESSION_EMAIL_KEY = 'session_email';
+
+let cachedEmail: string | null | undefined;
+
+export async function getSessionEmail(): Promise<string | null> {
+  if (cachedEmail !== undefined) return cachedEmail;
+  const stored =
+    Platform.OS === 'web' ? window.localStorage.getItem(SESSION_EMAIL_KEY) : await SecureStore.getItemAsync(SESSION_EMAIL_KEY);
+  cachedEmail = stored ?? null;
+  return cachedEmail;
+}
+
+export async function setSessionEmail(email: string): Promise<void> {
+  cachedEmail = email;
+  if (Platform.OS === 'web') {
+    window.localStorage.setItem(SESSION_EMAIL_KEY, email);
+  } else {
+    await SecureStore.setItemAsync(SESSION_EMAIL_KEY, email);
   }
 }

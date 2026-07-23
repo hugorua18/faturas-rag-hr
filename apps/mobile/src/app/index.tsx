@@ -10,6 +10,7 @@ import { parseInvoiceQr } from '@invoice-scanner/shared';
 import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
+import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
 import { logout } from '@/api/client';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
 import { confirmAction } from '@/utils/alert';
@@ -68,6 +69,7 @@ function CameraScreen() {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
   const pendingCount = usePendingCount();
+  const emailFeatureAvailable = useEmailFeatureAvailable();
   const [permission, requestPermission] = useCameraPermissions();
   // Toque no preview = repasse único de focagem (ver comentário no autofocus).
   const [focusNudge, setFocusNudge] = useState(false);
@@ -230,10 +232,12 @@ function CameraScreen() {
           <Ionicons name={torchOn ? 'flash' : 'flash-off'} size={20} color="#fff" />
         </Pressable>
         <View style={styles.topBarRightGroup}>
-          <Pressable style={styles.iconButton} onPress={() => router.push('/pending')}>
-            <Ionicons name="mail-unread-outline" size={20} color="#fff" />
-            <PendingCountBadge count={pendingCount} />
-          </Pressable>
+          {emailFeatureAvailable && (
+            <Pressable style={styles.iconButton} onPress={() => router.push('/pending')}>
+              <Ionicons name="mail-unread-outline" size={20} color="#fff" />
+              <PendingCountBadge count={pendingCount} />
+            </Pressable>
+          )}
           <Pressable style={styles.iconButton} onPress={() => router.push('/expenses')}>
             <Ionicons name="receipt-outline" size={20} color="#fff" />
           </Pressable>

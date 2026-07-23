@@ -6,6 +6,7 @@ import type { AcquirerNifSummary } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
+import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
 import { listAcquirerNifSummaries, logout } from '@/api/client';
 import { formatCurrency, formatNifLabel } from '@/utils/format';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
@@ -15,6 +16,7 @@ import { PendingCountBadge } from '@/components/pending-count-badge';
 export default function AcquirerNifListScreen() {
   const theme = useTheme();
   const pendingCount = usePendingCount();
+  const emailFeatureAvailable = useEmailFeatureAvailable();
   const [summaries, setSummaries] = useState<AcquirerNifSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,10 +93,12 @@ export default function AcquirerNifListScreen() {
         options={{
           headerRight: () => (
             <View style={styles.headerActions}>
-              <Pressable onPress={() => router.push('/pending')} hitSlop={8}>
-                <Ionicons name="mail-unread-outline" size={24} color={theme.accent} />
-                <PendingCountBadge count={pendingCount} />
-              </Pressable>
+              {emailFeatureAvailable && (
+                <Pressable onPress={() => router.push('/pending')} hitSlop={8}>
+                  <Ionicons name="mail-unread-outline" size={24} color={theme.accent} />
+                  <PendingCountBadge count={pendingCount} />
+                </Pressable>
+              )}
               <Pressable onPress={handleAdd} hitSlop={8}>
                 <Ionicons name="add-circle" size={28} color={theme.accent} />
               </Pressable>

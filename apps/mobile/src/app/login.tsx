@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/hooks/use-theme';
 import { MaxContentWidth } from '@/constants/theme';
 import { API_BASE_URL, GOOGLE_SIGNIN_CLIENT_ID_IOS, GOOGLE_SIGNIN_CLIENT_ID_WEB } from '@/api/config';
-import { setSessionToken } from '@/state/session';
+import { setSessionEmail, setSessionToken } from '@/state/session';
 import {
   captureWebLoginReturn,
   WEB_LOGIN_ERROR_KEY,
@@ -207,6 +207,7 @@ export default function LoginScreen() {
       }
       const body: { sessionToken: string; user: { id: string; email: string } } = await res.json();
       await setSessionToken(body.sessionToken);
+      await setSessionEmail(body.user.email);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/');
     } catch (err) {

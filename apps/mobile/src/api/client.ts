@@ -138,6 +138,14 @@ export async function listExpenses(filter?: {
   return response.json();
 }
 
+// Identidade da sessão atual — usada para repor o email guardado localmente
+// quando a sessão é anterior à introdução desse campo no storage.
+export async function fetchCurrentUser(): Promise<{ id: string; email: string }> {
+  const response = await apiFetch('/auth/me');
+  if (!response.ok) throw new Error('Falha ao obter o utilizador da sessão');
+  return response.json();
+}
+
 // Dispara já o poll da caixa de email no servidor (em vez de esperar pelo
 // tick de 5 min) — usado quando o utilizador abre a fila "Tratamento manual".
 // Pode demorar vários segundos (Gmail + anexos); o timeout do apiFetch cobre.
