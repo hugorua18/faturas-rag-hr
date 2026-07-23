@@ -18,27 +18,26 @@ import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
 import { prisma } from '../src/db/prisma';
 import { detectFileMimeType, fetchDriveFileBuffer } from '../src/services/drive.service';
 import { ingestDocument } from '../src/services/document-ingest.service';
+import { heuristicFieldsFromOcrText } from '../src/services/ocr.service';
 
 const OWNER_EMAIL = 'faturas.rag.hr@gmail.com';
 const APPLY = process.argv.includes('--apply');
 const execFileAsync = promisify(execFile);
 
-// Fallback com o Vision da Apple (scripts/decode-qr.swift) — o mesmo motor da
-// câmara do iPhone, que leu estes QR na altura da digitalização. O jsQR falha
-// em muitas fotos recomprimidas onde o Vision acerta.
-async function decodeQrWithVision(buffer: Buffer): Promise<string | null> {
+// Fallbacks com o Vision da Apple (scripts/decode-qr.swift) — o mesmo motor do
+// iPhone: modo 'qr' lê códigos que o jsQR falha em fotos recomprimidas; modo
+// 'text' faz OCR de qualidade muito superior ao tesseract em fotos de talões.
+async function runVision(buffer: Buffer, mode: 'qr' | 'text'): Promise<string | null> {
   const tmpPath = path.join(os.tmpdir(), `qr-${crypto.randomUUID()}.img`);
   fs.writeFileSync(tmpPath, buffer);
   try {
-    const { stdout } = await execFileAsync(
-      'swift',
-      [path.join(__dirname, 'decode-qr.swift'), tmpPath],
-      { timeout: 120000 },
-    );
-    const payload = stdout.trim();
-    return payload.length > 0 ? payload : null;
+    const args = [path.join(__dirname, 'decode-qr.swift'), tmpPath];
+    if (mode === 'text') args.push('--text');
+    const { stdout } = await execFileAsync('swift', args, { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
+    const output = stdout.trim();
+    return output.length > 0 ? output : null;
   } catch {
-    return null; // swift indisponível ou sem QR — segue sem Vision
+    return null; // swift indisponível ou sem resultados — segue sem Vision
   } finally {
     fs.unlinkSync(tmpPath);
   }
@@ -69,9 +68,10 @@ async function main() {
       let qrText = ingest.qrText;
       const ocrFields = ingest.ocrFields;
       let viaVision = false;
+      let usedVisionOcr = false;
 
       if (!parsedQr) {
-        const visionPayload = await decodeQrWithVision(buffer);
+        const visionPayload = await runVision(buffer, 'qr');
         if (visionPayload) {
           try {
             const visionParsed = parseInvoiceQr(visionPayload);
@@ -99,16 +99,27 @@ async function main() {
         if (parsedQr.totalAmount != null) updates.amountTotal = parsedQr.totalAmount;
         if (qrText) updates.qrRawPayload = qrText;
         updates.status = 'SUBMETIDA';
-      } else if (ocrFields) {
-        if (!expense.supplierName && ocrFields.supplierName) updates.supplierName = ocrFields.supplierName;
-        if (!expense.supplierNif && ocrFields.issuerNif) updates.supplierNif = ocrFields.issuerNif;
-        if (!expense.acquirerNif && ocrFields.acquirerNif) updates.acquirerNif = ocrFields.acquirerNif;
-        if (!expense.documentId && ocrFields.documentId) updates.documentId = ocrFields.documentId;
-        if (!expense.documentDate && ocrFields.documentDate) updates.documentDate = ocrFields.documentDate;
-        if (!expense.documentTime && ocrFields.documentTime) updates.documentTime = ocrFields.documentTime;
-        if (expense.amountBase == null && ocrFields.baseAmount != null) updates.amountBase = ocrFields.baseAmount;
-        if (expense.amountVat == null && ocrFields.vatAmount != null) updates.amountVat = ocrFields.vatAmount;
-        if (expense.amountTotal == null && ocrFields.totalAmount != null) updates.amountTotal = ocrFields.totalAmount;
+      } else {
+        // Sem QR: tenta os campos do OCR (tesseract, já corrido pelo
+        // ingestDocument); se não deu nada, recorre ao OCR do Vision — texto
+        // muito mais fiável em fotos — e passa-o pelas mesmas heurísticas.
+        let fields = ocrFields ?? {};
+        if (Object.keys(fields).length === 0) {
+          const visionText = await runVision(buffer, 'text');
+          if (visionText) {
+            fields = heuristicFieldsFromOcrText(visionText);
+            if (Object.keys(fields).length > 0) usedVisionOcr = true;
+          }
+        }
+        if (!expense.supplierName && fields.supplierName) updates.supplierName = fields.supplierName;
+        if (!expense.supplierNif && fields.issuerNif) updates.supplierNif = fields.issuerNif;
+        if (!expense.acquirerNif && fields.acquirerNif) updates.acquirerNif = fields.acquirerNif;
+        if (!expense.documentId && fields.documentId) updates.documentId = fields.documentId;
+        if (!expense.documentDate && fields.documentDate) updates.documentDate = fields.documentDate;
+        if (!expense.documentTime && fields.documentTime) updates.documentTime = fields.documentTime;
+        if (expense.amountBase == null && fields.baseAmount != null) updates.amountBase = fields.baseAmount;
+        if (expense.amountVat == null && fields.vatAmount != null) updates.amountVat = fields.vatAmount;
+        if (expense.amountTotal == null && fields.totalAmount != null) updates.amountTotal = fields.totalAmount;
       }
 
       const changedKeys = Object.keys(updates);
@@ -124,7 +135,9 @@ async function main() {
           `${
             updates.status === 'SUBMETIDA'
               ? `QR encontrado${viaVision ? ' (Vision)' : ''} → SUBMETIDA`
-              : 'OCR preencheu'
+              : usedVisionOcr
+                ? 'Vision OCR preencheu'
+                : 'OCR preencheu'
           }: ${changedKeys.join(', ')}`,
       );
       if (APPLY) {

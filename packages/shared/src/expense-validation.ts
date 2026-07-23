@@ -21,6 +21,19 @@ export function amountsAreConsistent(
 }
 
 /**
+ * Uma despesa SUBMETIDA tem de ter os três valores preenchidos (0 conta como
+ * preenchido — faturas isentas têm IVA 0). Despesas em tratamento manual
+ * podem continuar parciais até serem confirmadas.
+ */
+export function hasAllAmounts(
+  amountBase: number | null | undefined,
+  amountVat: number | null | undefined,
+  amountTotal: number | null | undefined,
+): boolean {
+  return amountBase != null && amountVat != null && amountTotal != null;
+}
+
+/**
  * O NIF do prestador (emitente) e o NIF do utente (adquirente) nunca podem
  * ser o mesmo — ninguém fatura a si próprio; quando acontece é engano de
  * preenchimento (ou OCR a apanhar o NIF errado).

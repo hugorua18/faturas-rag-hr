@@ -10,6 +10,7 @@ import {
   isReportStatus,
   isCurrencyCode,
   amountsAreConsistent,
+  hasAllAmounts,
   nifsAreDistinct,
   NO_NIF_KEY,
   NO_DATE_KEY,
@@ -241,10 +242,18 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
     return;
   }
 
-  // Coerência fiscal: base + IVA tem de bater com o total (tolerância de
+  // Coerência fiscal (POST cria sempre despesas SUBMETIDAS): os três valores
+  // são obrigatórios, base + IVA tem de bater com o total (tolerância de
   // 1 cêntimo para arredondamentos multi-taxa), e o NIF do prestador nunca
   // pode ser o mesmo que o do utente.
-  if (!amountsAreConsistent(toOptionalFloat(body.amountBase), toOptionalFloat(body.amountVat), toOptionalFloat(body.amountTotal))) {
+  const postBase = toOptionalFloat(body.amountBase);
+  const postVat = toOptionalFloat(body.amountVat);
+  const postTotal = toOptionalFloat(body.amountTotal);
+  if (!hasAllAmounts(postBase, postVat, postTotal)) {
+    res.status(400).json({ error: 'Preenche os três valores: base, IVA e total.' });
+    return;
+  }
+  if (!amountsAreConsistent(postBase, postVat, postTotal)) {
     res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
     return;
   }
@@ -336,10 +345,17 @@ expensesRouter.patch('/:id', async (req, res) => {
     }
 
     // Coerência fiscal sobre o estado FINAL (existente + alterações) — uma
-    // edição parcial não pode deixar a despesa incoerente.
+    // edição parcial não pode deixar a despesa incoerente. Se o estado final
+    // é SUBMETIDA (confirmação da fila manual ou edição de uma já submetida),
+    // os três valores tornam-se obrigatórios.
+    const nextStatus = (body.status as string | undefined) ?? existing.status;
     const nextBase = body.amountBase !== undefined ? toOptionalFloat(body.amountBase) : existing.amountBase;
     const nextVat = body.amountVat !== undefined ? toOptionalFloat(body.amountVat) : existing.amountVat;
     const nextTotal = body.amountTotal !== undefined ? toOptionalFloat(body.amountTotal) : existing.amountTotal;
+    if (nextStatus === 'SUBMETIDA' && !hasAllAmounts(nextBase, nextVat, nextTotal)) {
+      res.status(400).json({ error: 'Preenche os três valores: base, IVA e total.' });
+      return;
+    }
     if (!amountsAreConsistent(nextBase, nextVat, nextTotal)) {
       res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
       return;

@@ -15,7 +15,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { Expense, ExpenseType } from '@invoice-scanner/shared';
+import {
+  amountsAreConsistent,
+  hasAllAmounts,
+  nifsAreDistinct,
+  type Expense,
+  type ExpenseType,
+} from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
@@ -108,16 +114,31 @@ export default function ExpenseDetailScreen() {
 
   // Devolve { error } quando a moeda não é válida ou ainda falta o total em
   // Euro para converter — usado para bloquear a gravação nesses casos.
-  function fieldUpdates(): { data: ReturnType<typeof buildFieldUpdates> } | { error: string } {
+  function fieldUpdates(requireAllAmounts: boolean): { data: ReturnType<typeof buildFieldUpdates> } | { error: string } {
+    let data: ReturnType<typeof buildFieldUpdates>;
     if (currency !== 'EUR') {
       if (!/^[A-Z]{3}$/.test(currency)) {
         return { error: 'Indica um código de moeda válido (3 letras, ex: JPY).' };
       }
       const conversion = convertToEur(amountBase, amountVat, amountTotal, amountTotalEur);
       if (!conversion) return { error: 'Preenche o total em Euro para converter esta despesa.' };
-      return { data: buildFieldUpdates(conversion) };
+      data = buildFieldUpdates(conversion);
+    } else {
+      data = buildFieldUpdates(null);
     }
-    return { data: buildFieldUpdates(null) };
+    // Coerência fiscal — as mesmas regras do servidor, para feedback imediato
+    // no formulário (o servidor continua a ser a validação autoritativa).
+    // Os três valores são obrigatórios quando a despesa fica SUBMETIDA.
+    if (requireAllAmounts && !hasAllAmounts(data.amountBase ?? null, data.amountVat ?? null, data.amountTotal ?? null)) {
+      return { error: 'Preenche os três valores: base, IVA e total.' };
+    }
+    if (!amountsAreConsistent(data.amountBase ?? null, data.amountVat ?? null, data.amountTotal ?? null)) {
+      return { error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' };
+    }
+    if (!nifsAreDistinct(data.supplierNif, data.acquirerNif)) {
+      return { error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' };
+    }
+    return { data };
   }
 
   function buildFieldUpdates(conversion: ReturnType<typeof convertToEur>) {
@@ -141,7 +162,8 @@ export default function ExpenseDetailScreen() {
 
   async function handleSave() {
     if (!id || !type) return;
-    const result = fieldUpdates();
+    // Ao editar uma despesa já submetida, os três valores continuam obrigatórios.
+    const result = fieldUpdates(expense?.status === 'SUBMETIDA');
     if ('error' in result) {
       setError(result.error);
       return;
@@ -167,7 +189,8 @@ export default function ExpenseDetailScreen() {
       setError('Escolhe o tipo de despesa.');
       return;
     }
-    const result = fieldUpdates();
+    // Confirmar = submeter: os três valores são obrigatórios.
+    const result = fieldUpdates(true);
     if ('error' in result) {
       setError(result.error);
       return;

@@ -13,7 +13,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { type ExpenseType, type ExpenseInput } from '@invoice-scanner/shared';
+import {
+  amountsAreConsistent,
+  hasAllAmounts,
+  nifsAreDistinct,
+  type ExpenseType,
+  type ExpenseInput,
+} from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
@@ -162,6 +168,24 @@ export default function ValidationScreen() {
       setError('Preenche o total em Euro para converter esta despesa.');
       return;
     }
+    const effectiveBase = conversion ? conversion.amountBase : parseDecimal(amountBase);
+    const effectiveVat = conversion ? conversion.amountVat : parseDecimal(amountVat);
+    const effectiveTotal = conversion ? conversion.amountTotal : parseDecimal(amountTotal);
+    if (!hasAllAmounts(effectiveBase ?? null, effectiveVat ?? null, effectiveTotal ?? null)) {
+      hapticError();
+      setError('Preenche os três valores: base, IVA e total.');
+      return;
+    }
+    if (!amountsAreConsistent(effectiveBase ?? null, effectiveVat ?? null, effectiveTotal ?? null)) {
+      hapticError();
+      setError('Os valores não batem certo: base + IVA tem de ser igual ao total.');
+      return;
+    }
+    if (!nifsAreDistinct(supplierNif, acquirerNif)) {
+      hapticError();
+      setError('O NIF do prestador e o NIF do utente não podem ser iguais.');
+      return;
+    }
     if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setSubmitting(true);
     setError(null);
@@ -177,9 +201,9 @@ export default function ValidationScreen() {
         documentDate: documentDate || undefined,
         documentTime: documentTime || undefined,
         currency,
-        amountBase: conversion ? conversion.amountBase : parseDecimal(amountBase),
-        amountVat: conversion ? conversion.amountVat : parseDecimal(amountVat),
-        amountTotal: conversion ? conversion.amountTotal : parseDecimal(amountTotal),
+        amountBase: effectiveBase,
+        amountVat: effectiveVat,
+        amountTotal: effectiveTotal,
         originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
         originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
         originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
