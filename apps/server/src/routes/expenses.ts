@@ -4,7 +4,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { User } from '@prisma/client';
-import { isExpenseType, isExpenseStatus, isReportStatus, isCurrencyCode, NO_NIF_KEY, NO_DATE_KEY } from '@invoice-scanner/shared';
+import {
+  isExpenseType,
+  isExpenseStatus,
+  isReportStatus,
+  isCurrencyCode,
+  amountsAreConsistent,
+  nifsAreDistinct,
+  NO_NIF_KEY,
+  NO_DATE_KEY,
+} from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
 import { archiveInvoiceToDriveBestEffort } from '../services/drive.service';
@@ -232,6 +241,18 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
     return;
   }
 
+  // Coerência fiscal: base + IVA tem de bater com o total (tolerância de
+  // 1 cêntimo para arredondamentos multi-taxa), e o NIF do prestador nunca
+  // pode ser o mesmo que o do utente.
+  if (!amountsAreConsistent(toOptionalFloat(body.amountBase), toOptionalFloat(body.amountVat), toOptionalFloat(body.amountTotal))) {
+    res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
+    return;
+  }
+  if (!nifsAreDistinct(body.supplierNif, body.acquirerNif)) {
+    res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
+    return;
+  }
+
   // Deteção de duplicados: mesmo fornecedor (NIF) + mesmo nº de documento já
   // submetido antes. Só é possível verificar quando ambos os campos estão
   // preenchidos (ex: faturas sem QR, inseridas à mão, podem não ter nº de
@@ -313,6 +334,23 @@ expensesRouter.patch('/:id', async (req, res) => {
       res.status(404).json({ error: 'Despesa não encontrada' });
       return;
     }
+
+    // Coerência fiscal sobre o estado FINAL (existente + alterações) — uma
+    // edição parcial não pode deixar a despesa incoerente.
+    const nextBase = body.amountBase !== undefined ? toOptionalFloat(body.amountBase) : existing.amountBase;
+    const nextVat = body.amountVat !== undefined ? toOptionalFloat(body.amountVat) : existing.amountVat;
+    const nextTotal = body.amountTotal !== undefined ? toOptionalFloat(body.amountTotal) : existing.amountTotal;
+    if (!amountsAreConsistent(nextBase, nextVat, nextTotal)) {
+      res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
+      return;
+    }
+    const nextSupplierNif = body.supplierNif !== undefined ? (body.supplierNif as string) : existing.supplierNif;
+    const nextAcquirerNif = body.acquirerNif !== undefined ? (body.acquirerNif as string) : existing.acquirerNif;
+    if (!nifsAreDistinct(nextSupplierNif, nextAcquirerNif)) {
+      res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
+      return;
+    }
+
     const expense = await prisma.expense.update({
       where: { id: req.params.id },
       data: {
