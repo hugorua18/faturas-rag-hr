@@ -24,7 +24,7 @@ import {
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { createExpense, DuplicateExpenseError, extractDocument } from '@/api/client';
+import { createExpense, DuplicateExpenseError, extractDocument, resolveFileUrl } from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
 import {
   Card,
@@ -113,6 +113,14 @@ export default function ValidationScreen() {
         .then((extracted) => {
           setCapture({
             ...pending,
+            // Troca o URI local (blob/file://) pelo ficheiro processado no
+            // servidor — indispensável para PDFs: o URI local aponta para o
+            // PDF em bruto, que o <Image> não consegue renderizar; o servidor
+            // devolve a página 1 já rasterizada em PNG. Para imagens já era
+            // renderizável antes, mas passa a usar sempre a mesma fonte que
+            // será submetida.
+            fileUri: extracted.fileUrl ? resolveFileUrl(extracted.fileUrl) : pending.fileUri,
+            fileMimeType: extracted.fileMimeType,
             parsedQr: extracted.parsedQr,
             qrRawPayload: pending.qrRawPayload ?? extracted.qrRawPayload ?? undefined,
             ocrFields: extracted.ocrFields,
@@ -149,6 +157,8 @@ export default function ValidationScreen() {
       </View>
     );
   }
+
+  const isImagePreview = capture.fileMimeType.startsWith('image/');
 
   function hapticError() {
     if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -260,12 +270,25 @@ export default function ValidationScreen() {
         contentContainerStyle={[styles.scrollContent, webMaxWidthStyle]}
         keyboardShouldPersistTaps="handled"
       >
-        <Pressable onPress={() => setPreviewVisible(true)}>
-          <Image source={{ uri: capture.fileUri }} style={styles.preview} resizeMode="cover" />
-          <View style={styles.previewBadge}>
-            <Ionicons name="expand-outline" size={14} color="#fff" />
+        {/* PDFs (antes de a extração devolver a página rasterizada) não são
+            renderizáveis por <Image> — mostra um marcador de posição em vez
+            de uma caixa preta. Imagens continuam com a pré-visualização
+            imediata de sempre. */}
+        {isImagePreview ? (
+          <Pressable onPress={() => setPreviewVisible(true)}>
+            <Image source={{ uri: capture.fileUri }} style={styles.preview} resizeMode="cover" />
+            <View style={styles.previewBadge}>
+              <Ionicons name="expand-outline" size={14} color="#fff" />
+            </View>
+          </Pressable>
+        ) : (
+          <View style={[styles.preview, styles.previewPlaceholder, { backgroundColor: theme.backgroundElement }]}>
+            <Ionicons name="document-text-outline" size={32} color={theme.textSecondary} />
+            <Text style={[styles.previewPlaceholderText, { color: theme.textSecondary }]}>
+              {analyzing ? 'A preparar a pré-visualização…' : 'Documento PDF'}
+            </Text>
           </View>
-        </Pressable>
+        )}
 
         <View
           style={[
@@ -401,6 +424,8 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   centerText: { textAlign: 'center', fontSize: 16 },
   preview: { width: '100%', height: 200, borderRadius: 14 },
+  previewPlaceholder: { justifyContent: 'center', alignItems: 'center', gap: 8 },
+  previewPlaceholderText: { fontSize: 13, fontWeight: '500' },
   previewBadge: {
     position: 'absolute',
     right: 10,
