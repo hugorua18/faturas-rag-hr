@@ -63,7 +63,9 @@ async function main() {
   for (const expense of pending) {
     try {
       const buffer = await fetchDriveFileBuffer(user, expense.driveFileId!);
-      const ingest = await ingestDocument(buffer, detectFileMimeType(buffer));
+      // Script local, sem timeout de cliente HTTP a pressionar — orçamento
+      // generoso para o OCR multilingue ter hipótese em documentos difíceis.
+      const ingest = await ingestDocument(buffer, detectFileMimeType(buffer), { ocrTimeoutMs: 120_000 });
       let parsedQr: ParsedInvoiceQr | null = ingest.parsedQr;
       let qrText = ingest.qrText;
       const ocrFields = ingest.ocrFields;

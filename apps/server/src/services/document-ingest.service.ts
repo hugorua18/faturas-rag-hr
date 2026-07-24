@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createCanvas, loadImage, DOMMatrix, type Image } from '@napi-rs/canvas';
 import jsQR from 'jsqr';
 import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
-import { extractTextViaOcr, heuristicFieldsFromOcrText, type OcrFields } from './ocr.service';
+import { extractOcrFieldsCascaded, type OcrFields } from './ocr.service';
 
 // pdf.js pede um DOMMatrix global para renderizar em Node (normalmente só existe no browser).
 (global as unknown as { DOMMatrix?: unknown }).DOMMatrix ??= DOMMatrix;
@@ -66,7 +66,11 @@ function decodeQrFromImage(img: Image): string | null {
   return null;
 }
 
-export async function ingestDocument(buffer: Buffer, mimeType: string): Promise<IngestedDocument> {
+export async function ingestDocument(
+  buffer: Buffer,
+  mimeType: string,
+  options?: { ocrTimeoutMs?: number },
+): Promise<IngestedDocument> {
   let imageBuffer: Buffer;
   let imageMimeType: 'image/png' | 'image/jpeg';
 
@@ -96,11 +100,7 @@ export async function ingestDocument(buffer: Buffer, mimeType: string): Promise<
     const OCR_MAX_WIDTH = 2200;
     const ocrInput =
       img.width > OCR_MAX_WIDTH ? scaleImageToCanvasData(img, OCR_MAX_WIDTH).canvas.toBuffer('image/png') : imageBuffer;
-    const ocrText = await extractTextViaOcr(ocrInput);
-    if (ocrText) {
-      const fields = heuristicFieldsFromOcrText(ocrText);
-      ocrFields = Object.keys(fields).length > 0 ? fields : null;
-    }
+    ocrFields = (await extractOcrFieldsCascaded(ocrInput, options?.ocrTimeoutMs)).fields;
   }
 
   return { parsedQr, qrText, ocrFields, imageBuffer, imageMimeType };

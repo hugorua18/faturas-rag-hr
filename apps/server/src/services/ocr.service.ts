@@ -12,41 +12,47 @@ const execFileAsync = promisify(execFile);
 // é uma condição esperada (ex: ambiente sem Docker), não um erro por pedido.
 let hasWarnedMissingTesseract = false;
 
-// Faturas de viagem vêm em várias línguas — o OCR tenta todas estas. A lista
-// efetiva é a INTERSEÇÃO com os pacotes instalados (tesseract rebenta se lhe
-// pedirem uma língua sem dados de treino), resolvida uma vez e reutilizada.
-const WANTED_OCR_LANGUAGES = ['por', 'spa', 'fra', 'deu', 'ita'];
-let cachedOcrLanguages: string | null = null;
+// Faturas de viagem vêm em várias línguas — mas pedir todas de uma vez ao
+// tesseract é sensivelmente mais lento do que só português (ver cascata em
+// extractOcrFieldsCascaded abaixo). A lista efetiva de cada tentativa é a
+// INTERSEÇÃO com os pacotes instalados (tesseract rebenta se lhe pedirem uma
+// língua sem dados de treino) — os idiomas instalados são resolvidos uma vez
+// e reutilizados.
+const PRIMARY_OCR_LANGUAGES = ['por'];
+const FALLBACK_OCR_LANGUAGES = ['por', 'spa', 'fra', 'deu', 'ita'];
+let cachedInstalledLanguages: Set<string> | null = null;
 
-async function resolveOcrLanguages(): Promise<string> {
-  if (cachedOcrLanguages !== null) return cachedOcrLanguages;
+async function getInstalledLanguages(): Promise<Set<string>> {
+  if (cachedInstalledLanguages) return cachedInstalledLanguages;
   try {
     const { stdout } = await execFileAsync('tesseract', ['--list-langs']);
-    const installed = new Set(
+    cachedInstalledLanguages = new Set(
       stdout
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => /^[a-z_]{3,}$/i.test(line)),
     );
-    const usable = WANTED_OCR_LANGUAGES.filter((lang) => installed.has(lang));
-    cachedOcrLanguages = usable.length > 0 ? usable.join('+') : 'por';
-    if (usable.length < WANTED_OCR_LANGUAGES.length) {
-      console.warn(
-        `[ocr] línguas em falta (${WANTED_OCR_LANGUAGES.filter((l) => !installed.has(l)).join(', ')}) — a usar: ${cachedOcrLanguages}`,
-      );
-    }
   } catch {
-    cachedOcrLanguages = 'por'; // sem --list-langs, o comportamento antigo
+    cachedInstalledLanguages = new Set(['por']); // sem --list-langs, assume só o essencial
   }
-  return cachedOcrLanguages;
+  return cachedInstalledLanguages;
 }
 
-export async function extractTextViaOcr(imageBuffer: Buffer): Promise<string | null> {
+async function resolveLanguageArg(wanted: string[]): Promise<string> {
+  const installed = await getInstalledLanguages();
+  const usable = wanted.filter((lang) => installed.has(lang));
+  if (usable.length < wanted.length) {
+    console.warn(`[ocr] línguas em falta (${wanted.filter((l) => !installed.has(l)).join(', ')})`);
+  }
+  return usable.length > 0 ? usable.join('+') : 'por';
+}
+
+async function extractTextViaOcr(imageBuffer: Buffer, languages: string[], timeoutMs: number): Promise<string | null> {
   const tempFilePath = path.join(os.tmpdir(), `${crypto.randomUUID()}.png`);
   try {
     await fs.writeFile(tempFilePath, imageBuffer);
-    const languages = await resolveOcrLanguages();
-    const { stdout } = await execFileAsync('tesseract', [tempFilePath, 'stdout', '-l', languages]);
+    const langArg = await resolveLanguageArg(languages);
+    const { stdout } = await execFileAsync('tesseract', [tempFilePath, 'stdout', '-l', langArg], { timeout: timeoutMs });
     return stdout;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
@@ -56,11 +62,58 @@ export async function extractTextViaOcr(imageBuffer: Buffer): Promise<string | n
       }
       return null;
     }
+    if ((err as NodeJS.ErrnoException & { killed?: boolean })?.killed) {
+      console.warn(`[ocr] OCR (${languages.join('+')}) excedeu o limite de ${timeoutMs}ms — a passar à frente.`);
+      return null;
+    }
     console.error('[ocr] falha ao executar OCR sobre o documento', err);
     return null;
   } finally {
     await fs.rm(tempFilePath, { force: true });
   }
+}
+
+// Orçamento TOTAL por omissão para o caminho interativo (upload/câmara/
+// poller): tem de responder dentro do timeout de 60s do cliente
+// (apps/mobile/src/api/client.ts), que também inclui a renderização do PDF e
+// a viagem de rede — 25s deixa margem. Sem um limite destes, um documento
+// difícil podia ultrapassar os 60s do cliente e a extração falhava SEM
+// devolver sequer a imagem rasterizada — a app ficava sem pré-visualização
+// nenhuma (nem OCR nem o ficheiro). O script de recuperação
+// (scripts/refill-manual-expenses.ts) corre localmente sem esta pressão e
+// passa um orçamento maior.
+const DEFAULT_OCR_TOTAL_TIMEOUT_MS = 25_000;
+
+// Cascata: tenta primeiro só português (rápido, cobre a esmagadora maioria
+// das faturas desta app) — só recorre ao conjunto multilingue se o português
+// não encontrar NADA de aproveitável, e sempre dentro do orçamento total
+// (o que sobrar da primeira tentativa). Devolve o texto bruto (para logging)
+// e os campos já extraídos pelas heurísticas.
+export async function extractOcrFieldsCascaded(
+  imageBuffer: Buffer,
+  totalTimeoutMs = DEFAULT_OCR_TOTAL_TIMEOUT_MS,
+): Promise<{ text: string | null; fields: OcrFields | null }> {
+  const started = Date.now();
+  // A maior parte do orçamento vai para a 1ª tentativa (a que quase sempre
+  // resolve); o mínimo de 3s para a 2ª evita gastar tudo sem dar hipótese
+  // real ao multilingue.
+  const primaryTimeout = Math.max(3_000, totalTimeoutMs - 3_000);
+  const primaryText = await extractTextViaOcr(imageBuffer, PRIMARY_OCR_LANGUAGES, primaryTimeout);
+  const primaryFields = primaryText ? heuristicFieldsFromOcrText(primaryText) : {};
+  if (Object.keys(primaryFields).length > 0) {
+    return { text: primaryText, fields: primaryFields };
+  }
+
+  const remaining = totalTimeoutMs - (Date.now() - started);
+  if (remaining < 3_000) {
+    return { text: primaryText, fields: null };
+  }
+  const fallbackText = await extractTextViaOcr(imageBuffer, FALLBACK_OCR_LANGUAGES, remaining);
+  const fallbackFields = fallbackText ? heuristicFieldsFromOcrText(fallbackText) : {};
+  if (Object.keys(fallbackFields).length > 0) {
+    return { text: fallbackText, fields: fallbackFields };
+  }
+  return { text: fallbackText ?? primaryText, fields: null };
 }
 
 export type OcrFields = Partial<

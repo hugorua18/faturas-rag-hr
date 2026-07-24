@@ -107,7 +107,9 @@ async function main() {
           const { data } = await drive.files.get({ fileId: entry.id, alt: 'media' }, { responseType: 'arraybuffer' });
           const buffer = Buffer.from(data as ArrayBuffer);
           const mimeType = /\.png$/i.test(entry.name) ? 'image/png' : 'image/jpeg';
-          const { parsedQr, qrText, ocrFields } = await ingestDocument(buffer, mimeType);
+          // Script local, sem timeout de cliente HTTP a pressionar — orçamento
+          // generoso para o OCR multilingue ter hipótese em documentos difíceis.
+          const { parsedQr, qrText, ocrFields } = await ingestDocument(buffer, mimeType, { ocrTimeoutMs: 120_000 });
           const fromName = parseRecoveredFileName(entry.name);
 
           // Com QR os dados fiscais estão completos → SUBMETIDA; sem QR faltam
