@@ -13,7 +13,7 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.hugorua.invoicescanner",
-      "buildNumber": "21",
+      "buildNumber": "22",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "LSSupportsOpeningDocumentsInPlace": false,
