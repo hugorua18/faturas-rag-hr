@@ -4,7 +4,6 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Image as RNImage } from 'react-native';
 import { router } from 'expo-router';
 
-import { extractDocument, resolveFileUrl } from '@/api/client';
 import { setPendingCapture } from '@/state/pending-capture';
 import { notify } from '@/utils/alert';
 
@@ -109,27 +108,19 @@ async function maybeDownscaleImageAsset(asset: {
   }
 }
 
+// Navega JÁ para o ecrã de validação — a extração (QR/OCR) corre lá em
+// segundo plano, com o aviso "A analisar…" e recuo para preenchimento manual
+// se falhar ou demorar. Antes, a análise bloqueava aqui (timeout de 60s) e um
+// OCR lento no servidor matava o fluxo inteiro sem alternativa manual — o
+// mesmo desenho do importSharedFile, que nunca sofreu deste problema.
 async function importFileAsset(asset: { uri: string; name: string; mimeType?: string | null }): Promise<boolean> {
-  try {
-    const prepared = await maybeDownscaleImageAsset(asset);
-    const { parsedQr, qrRawPayload, ocrFields, originalFilePath, fileUrl, fileMimeType } = await extractDocument({
-      uri: prepared.uri,
-      name: prepared.name,
-      mimeType: prepared.mimeType ?? 'application/octet-stream',
-    });
-    setPendingCapture({
-      fileUri: fileUrl ? resolveFileUrl(fileUrl) : asset.uri,
-      source: 'UPLOAD',
-      fileMimeType,
-      parsedQr,
-      qrRawPayload: qrRawPayload ?? undefined,
-      ocrFields,
-      existingFilePath: originalFilePath,
-    });
-    router.push('/validation');
-    return true;
-  } catch (err) {
-    notify('Erro', err instanceof Error ? err.message : 'Falha ao processar o ficheiro');
-    return false;
-  }
+  const prepared = await maybeDownscaleImageAsset(asset);
+  setPendingCapture({
+    fileUri: prepared.uri,
+    fileMimeType: prepared.mimeType ?? 'application/octet-stream',
+    source: 'UPLOAD',
+    parsedQr: null,
+  });
+  router.push('/validation');
+  return true;
 }

@@ -96,11 +96,14 @@ export default function ValidationScreen() {
     } else if (pending.ocrFields) {
       fillFromOcr(pending.ocrFields);
     } else if (!pending.existingFilePath) {
-      // Foto da câmara sem QR lido: envia já a imagem para o servidor, que
+      // Foto da câmara sem QR lido, OU ficheiro escolhido (galeria/documentos,
+      // ainda sem passar pelo servidor): envia já a imagem para extração, que
       // tenta primeiro decodificar o QR (jsqr apanha códigos que o scanner ao
       // vivo perdeu) e recua para OCR. Além de preencher os campos, o ficheiro
       // fica gravado no servidor (existingFilePath) — o submeter passa a ser
-      // instantâneo porque já não reenvia os bytes da foto.
+      // instantâneo porque já não reenvia os bytes. Corre em segundo plano
+      // (banner "A analisar…") e falha graciosamente para preenchimento
+      // manual — nunca bloqueia a navegação para este ecrã.
       setAnalyzing(true);
       extractDocument({
         uri: pending.fileUri,
