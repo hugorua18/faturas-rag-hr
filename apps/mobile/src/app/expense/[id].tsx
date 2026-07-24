@@ -26,6 +26,7 @@ import {
 
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
+import { useImageAspectRatio } from '@/hooks/use-image-aspect-ratio';
 import { webMaxWidthStyle } from '@/constants/theme';
 import { deleteExpense, getExpense, resolveFileUrl, updateExpense } from '@/api/client';
 import {
@@ -59,6 +60,10 @@ export default function ExpenseDetailScreen() {
   const isWideLayout = width >= WIDE_LAYOUT_BREAKPOINT;
   const { id } = useLocalSearchParams<{ id: string }>();
   const [expense, setExpense] = useState<Expense | null | undefined>(undefined);
+  // Hook chamado sempre (antes dos "return" condicionais mais abaixo, que só
+  // existem depois de "expense" carregar) — as Regras dos Hooks exigem que
+  // corra em todos os renders, por isso a condição vive dentro do argumento.
+  const aspectRatio = useImageAspectRatio(expense?.fileUrl ? resolveFileUrl(expense.fileUrl) : null);
   const [type, setType] = useState<ExpenseType | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierNif, setSupplierNif] = useState('');
@@ -307,8 +312,12 @@ export default function ExpenseDetailScreen() {
               <Pressable onPress={() => setPreviewVisible(true)}>
                 <Image
                   source={{ uri: resolveFileUrl(expense.fileUrl) }}
-                  style={[styles.preview, isWideLayout && styles.previewWide]}
-                  resizeMode="cover"
+                  // Ecrã largo: mostra o documento completo (proporção real,
+                  // sem cortar) em vez de uma altura fixa — importante em
+                  // talões compridos. Ecrã estreito mantém a miniatura fixa
+                  // de sempre (toca para ver em ecrã inteiro no PhotoLightbox).
+                  style={isWideLayout ? [styles.preview, { aspectRatio }] : [styles.preview, styles.previewNarrow]}
+                  resizeMode={isWideLayout ? 'contain' : 'cover'}
                 />
                 <View style={styles.previewBadge}>
                   <Ionicons name="expand-outline" size={14} color="#fff" />
@@ -460,8 +469,11 @@ const styles = StyleSheet.create({
   formColumn: { flex: 1, minWidth: 0 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   centerText: { textAlign: 'center', fontSize: 16 },
-  preview: { width: '100%', height: 200, borderRadius: 14 },
-  previewWide: { height: 320 },
+  // Sem altura fixa: em ecrã largo a altura vem do aspectRatio real da
+  // imagem (mostra o documento completo); previewNarrow repõe a altura fixa
+  // de sempre no telemóvel.
+  preview: { width: '100%', borderRadius: 14 },
+  previewNarrow: { height: 200 },
   previewBadge: {
     position: 'absolute',
     right: 10,
