@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -31,6 +32,7 @@ import {
   Card,
   CategoryChipPicker,
   CurrencyChipPicker,
+  DateField,
   FieldRow,
   PhotoLightbox,
   SectionHeader,
@@ -45,9 +47,16 @@ const SOURCE_LABELS: Record<string, string> = {
   EMAIL: 'email',
 };
 
+// Mesmo limiar do ecrã de validação (validation.tsx) — pré-visualização à
+// direita e campos à esquerda em ecrã largo; empilhado como sempre no
+// telemóvel em retrato.
+const WIDE_LAYOUT_BREAKPOINT = 820;
+
 export default function ExpenseDetailScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const isWideLayout = width >= WIDE_LAYOUT_BREAKPOINT;
   const { id } = useLocalSearchParams<{ id: string }>();
   const [expense, setExpense] = useState<Expense | null | undefined>(undefined);
   const [type, setType] = useState<ExpenseType | null>(null);
@@ -282,134 +291,151 @@ export default function ExpenseDetailScreen() {
       />
       <ScrollView
         style={{ backgroundColor: theme.groupedBackground }}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: 32 + insets.bottom }, webMaxWidthStyle]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: 32 + insets.bottom },
+          isWideLayout ? styles.scrollContentWide : webMaxWidthStyle,
+        ]}
         keyboardShouldPersistTaps="handled"
       >
-        {expense.fileUrl && (
-          <Pressable onPress={() => setPreviewVisible(true)}>
-            <Image source={{ uri: resolveFileUrl(expense.fileUrl) }} style={styles.preview} resizeMode="cover" />
-            <View style={styles.previewBadge}>
-              <Ionicons name="expand-outline" size={14} color="#fff" />
-            </View>
-          </Pressable>
-        )}
+        {/* Mesmo truque de validation.tsx: 'row-reverse' com a pré-visualização
+            como primeiro bloco consegue "imagem no topo" em ecrã estreito e
+            "imagem à direita" em ecrã largo, sem duplicar JSX por layout. */}
+        <View style={isWideLayout ? styles.wideRow : undefined}>
+          <View style={isWideLayout ? styles.previewColumn : undefined}>
+            {expense.fileUrl && (
+              <Pressable onPress={() => setPreviewVisible(true)}>
+                <Image
+                  source={{ uri: resolveFileUrl(expense.fileUrl) }}
+                  style={[styles.preview, isWideLayout && styles.previewWide]}
+                  resizeMode="cover"
+                />
+                <View style={styles.previewBadge}>
+                  <Ionicons name="expand-outline" size={14} color="#fff" />
+                </View>
+              </Pressable>
+            )}
 
-        {expense.status === 'TRATAMENTO_MANUAL' && (
-          <View style={[styles.pendingBanner, { backgroundColor: `${theme.warning}20` }]}>
-            <Ionicons name="mail-unread-outline" size={16} color={theme.warning} />
-            <Text style={[styles.pendingBannerText, { color: theme.warning }]}>
-              Por validar — recebida por {SOURCE_LABELS[expense.source] ?? expense.source}. Confirma os dados abaixo.
-            </Text>
+            {expense.status === 'TRATAMENTO_MANUAL' && (
+              <View style={[styles.pendingBanner, { backgroundColor: `${theme.warning}20` }]}>
+                <Ionicons name="mail-unread-outline" size={16} color={theme.warning} />
+                <Text style={[styles.pendingBannerText, { color: theme.warning }]}>
+                  Por validar — recebida por {SOURCE_LABELS[expense.source] ?? expense.source}. Confirma os dados abaixo.
+                </Text>
+              </View>
+            )}
           </View>
-        )}
 
-        <SectionHeader label="Dados da fatura" theme={theme} />
-        <Card theme={theme}>
-          <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
-          <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
-          <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
-          <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
-          <FieldRow theme={theme} label="Data" value={documentDate} onChangeText={setDocumentDate} placeholder="AAAA-MM-DD" />
-          <FieldRow theme={theme} label="Hora" value={documentTime} onChangeText={setDocumentTime} placeholder="HH:MM" last />
-        </Card>
+          <View style={isWideLayout ? styles.formColumn : undefined}>
+            <SectionHeader label="Dados da fatura" theme={theme} />
+            <Card theme={theme}>
+              <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
+              <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
+              <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
+              <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
+              <DateField theme={theme} label="Data" value={documentDate} onChange={setDocumentDate} />
+              <FieldRow theme={theme} label="Hora" value={documentTime} onChangeText={setDocumentTime} placeholder="HH:MM" last />
+            </Card>
 
-        <SectionHeader label="Moeda" theme={theme} />
-        <CurrencyChipPicker theme={theme} value={currency} onChange={setCurrency} />
+            <SectionHeader label="Moeda" theme={theme} />
+            <CurrencyChipPicker theme={theme} value={currency} onChange={setCurrency} />
 
-        <SectionHeader label="Valores" theme={theme} />
-        <Card theme={theme}>
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor sem IVA' : `Valor sem IVA (${currency})`}
-            value={amountBase}
-            onChangeText={setAmountBase}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-          />
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor do IVA' : `Valor do IVA (${currency})`}
-            value={amountVat}
-            onChangeText={setAmountVat}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-          />
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor com IVA' : `Valor com IVA (${currency})`}
-            value={amountTotal}
-            onChangeText={setAmountTotal}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-            last
-          />
-        </Card>
-
-        {currency !== 'EUR' && (
-          <>
-            <SectionHeader label="Conversão para Euro" theme={theme} />
+            <SectionHeader label="Valores" theme={theme} />
             <Card theme={theme}>
               <FieldRow
                 theme={theme}
-                label="Total em Euro (€)"
-                value={amountTotalEur}
-                onChangeText={setAmountTotalEur}
+                label={currency === 'EUR' ? 'Valor sem IVA' : `Valor sem IVA (${currency})`}
+                value={amountBase}
+                onChangeText={setAmountBase}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+              />
+              <FieldRow
+                theme={theme}
+                label={currency === 'EUR' ? 'Valor do IVA' : `Valor do IVA (${currency})`}
+                value={amountVat}
+                onChangeText={setAmountVat}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+              />
+              <FieldRow
+                theme={theme}
+                label={currency === 'EUR' ? 'Valor com IVA' : `Valor com IVA (${currency})`}
+                value={amountTotal}
+                onChangeText={setAmountTotal}
                 keyboardType="decimal-pad"
                 placeholder="0.00"
                 last
               />
             </Card>
-            {(() => {
-              const preview = convertToEur(amountBase, amountVat, amountTotal, amountTotalEur);
-              return preview ? (
-                <Text style={[styles.conversionPreview, { color: theme.textSecondary }]}>
-                  Em euro: base {preview.amountBase?.toFixed(2) ?? '—'} € · IVA {preview.amountVat?.toFixed(2) ?? '—'} € ·
-                  total {preview.amountTotal.toFixed(2)} €
+
+            {currency !== 'EUR' && (
+              <>
+                <SectionHeader label="Conversão para Euro" theme={theme} />
+                <Card theme={theme}>
+                  <FieldRow
+                    theme={theme}
+                    label="Total em Euro (€)"
+                    value={amountTotalEur}
+                    onChangeText={setAmountTotalEur}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    last
+                  />
+                </Card>
+                {(() => {
+                  const preview = convertToEur(amountBase, amountVat, amountTotal, amountTotalEur);
+                  return preview ? (
+                    <Text style={[styles.conversionPreview, { color: theme.textSecondary }]}>
+                      Em euro: base {preview.amountBase?.toFixed(2) ?? '—'} € · IVA {preview.amountVat?.toFixed(2) ?? '—'} € ·
+                      total {preview.amountTotal.toFixed(2)} €
+                    </Text>
+                  ) : null;
+                })()}
+              </>
+            )}
+
+            <SectionHeader label="Tipo de despesa" theme={theme} />
+            <CategoryChipPicker theme={theme} value={type} onChange={setType} />
+
+            {error && (
+              <View style={styles.errorRow}>
+                <Ionicons name="alert-circle" size={16} color={theme.destructive} />
+                <Text style={[styles.errorText, { color: theme.destructive }]}>{error}</Text>
+              </View>
+            )}
+            {saved && !error && (
+              <View style={styles.errorRow}>
+                <Ionicons name="checkmark-circle" size={16} color={theme.success} />
+                <Text style={[styles.errorText, { color: theme.success }]}>Alterações guardadas.</Text>
+              </View>
+            )}
+
+            <Pressable
+              style={[styles.submitButton, { backgroundColor: theme.accent, opacity: saving ? 0.6 : 1 }]}
+              onPress={expense.status === 'TRATAMENTO_MANUAL' ? handleConfirmPending : handleSave}
+              disabled={saving || deleting}
+            >
+              <Text style={styles.submitButtonText}>
+                {saving
+                  ? 'A guardar...'
+                  : expense.status === 'TRATAMENTO_MANUAL'
+                    ? 'Confirmar e submeter'
+                    : 'Guardar alterações'}
+              </Text>
+            </Pressable>
+
+            <Pressable style={styles.deleteButton} onPress={handleDelete} disabled={saving || deleting}>
+              {deleting ? (
+                <ActivityIndicator color={theme.destructive} />
+              ) : (
+                <Text style={[styles.deleteButtonText, { color: theme.destructive }]}>
+                  {expense.status === 'TRATAMENTO_MANUAL' ? 'Descartar' : 'Eliminar despesa'}
                 </Text>
-              ) : null;
-            })()}
-          </>
-        )}
-
-        <SectionHeader label="Tipo de despesa" theme={theme} />
-        <CategoryChipPicker theme={theme} value={type} onChange={setType} />
-
-        {error && (
-          <View style={styles.errorRow}>
-            <Ionicons name="alert-circle" size={16} color={theme.destructive} />
-            <Text style={[styles.errorText, { color: theme.destructive }]}>{error}</Text>
+              )}
+            </Pressable>
           </View>
-        )}
-        {saved && !error && (
-          <View style={styles.errorRow}>
-            <Ionicons name="checkmark-circle" size={16} color={theme.success} />
-            <Text style={[styles.errorText, { color: theme.success }]}>Alterações guardadas.</Text>
-          </View>
-        )}
-
-        <Pressable
-          style={[styles.submitButton, { backgroundColor: theme.accent, opacity: saving ? 0.6 : 1 }]}
-          onPress={expense.status === 'TRATAMENTO_MANUAL' ? handleConfirmPending : handleSave}
-          disabled={saving || deleting}
-        >
-          <Text style={styles.submitButtonText}>
-            {saving
-              ? 'A guardar...'
-              : expense.status === 'TRATAMENTO_MANUAL'
-                ? 'Confirmar e submeter'
-                : 'Guardar alterações'}
-          </Text>
-        </Pressable>
-
-        <Pressable style={styles.deleteButton} onPress={handleDelete} disabled={saving || deleting}>
-          {deleting ? (
-            <ActivityIndicator color={theme.destructive} />
-          ) : (
-            <Text style={[styles.deleteButtonText, { color: theme.destructive }]}>
-              {expense.status === 'TRATAMENTO_MANUAL' ? 'Descartar' : 'Eliminar despesa'}
-            </Text>
-          )}
-        </Pressable>
+        </View>
       </ScrollView>
 
       {/* Montada só enquanto aberta: um Modal transparente permanentemente
@@ -428,9 +454,14 @@ export default function ExpenseDetailScreen() {
 
 const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 48, gap: 4 },
+  scrollContentWide: { maxWidth: 1100, alignSelf: 'center', width: '100%', paddingHorizontal: 24 },
+  wideRow: { flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 28 },
+  previewColumn: { width: 360 },
+  formColumn: { flex: 1, minWidth: 0 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   centerText: { textAlign: 'center', fontSize: 16 },
   preview: { width: '100%', height: 200, borderRadius: 14 },
+  previewWide: { height: 320 },
   previewBadge: {
     position: 'absolute',
     right: 10,

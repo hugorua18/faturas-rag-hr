@@ -6,6 +6,8 @@ import { CURRENCIES, CURRENCY_LABELS, EXPENSE_TYPES, EXPENSE_TYPE_LABELS, type E
 import type { useTheme } from '@/hooks/use-theme';
 import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
 
+export { DateField } from './date-field';
+
 type Theme = ReturnType<typeof useTheme>;
 
 export function SectionHeader({ label, theme }: { label: string; theme: Theme }) {

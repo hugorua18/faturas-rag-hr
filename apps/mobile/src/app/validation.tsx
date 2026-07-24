@@ -31,6 +31,7 @@ import {
   Card,
   CategoryChipPicker,
   CurrencyChipPicker,
+  DateField,
   FieldRow,
   PhotoLightbox,
   SectionHeader,
@@ -364,7 +365,7 @@ export default function ValidationScreen() {
               <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
               <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
               <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
-              <FieldRow theme={theme} label="Data" value={documentDate} onChangeText={setDocumentDate} placeholder="AAAA-MM-DD" />
+              <DateField theme={theme} label="Data" value={documentDate} onChange={setDocumentDate} />
               <FieldRow theme={theme} label="Hora" value={documentTime} onChangeText={setDocumentTime} placeholder="HH:MM" last />
             </Card>
 
