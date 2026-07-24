@@ -8,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,8 +39,16 @@ import { confirmAction } from '@/utils/alert';
 import { parseDecimal } from '@/utils/number';
 import { convertToEur } from '@/utils/currency-conversion';
 
+// Acima deste ecrã, o layout passa a ter duas colunas — pré-visualização à
+// direita, campos à esquerda; abaixo, mantém-se a pilha vertical de sempre
+// (a maioria dos telemóveis em retrato). O valor cobre desktop/tablet e
+// telemóveis em paisagem, sem afetar o uso normal em iPhone.
+const WIDE_LAYOUT_BREAKPOINT = 820;
+
 export default function ValidationScreen() {
   const theme = useTheme();
+  const { width } = useWindowDimensions();
+  const isWideLayout = width >= WIDE_LAYOUT_BREAKPOINT;
   const [capture, setCapture] = useState<PendingCapture | null | undefined>(undefined);
   const [type, setType] = useState<ExpenseType | null>(null);
   const [supplierName, setSupplierName] = useState('');
@@ -267,151 +276,175 @@ export default function ValidationScreen() {
       />
       <ScrollView
         style={{ backgroundColor: theme.groupedBackground }}
-        contentContainerStyle={[styles.scrollContent, webMaxWidthStyle]}
+        contentContainerStyle={[styles.scrollContent, isWideLayout ? styles.scrollContentWide : webMaxWidthStyle]}
         keyboardShouldPersistTaps="handled"
       >
-        {/* PDFs (antes de a extração devolver a página rasterizada) não são
-            renderizáveis por <Image> — mostra um marcador de posição em vez
-            de uma caixa preta. Imagens continuam com a pré-visualização
-            imediata de sempre. */}
-        {isImagePreview ? (
-          <Pressable onPress={() => setPreviewVisible(true)}>
-            <Image source={{ uri: capture.fileUri }} style={styles.preview} resizeMode="cover" />
-            <View style={styles.previewBadge}>
-              <Ionicons name="expand-outline" size={14} color="#fff" />
+        {/* Ecrã largo (desktop/tablet/paisagem): duas colunas, pré-visualização
+            à direita e campos à esquerda — 'row-reverse' consegue isto com a
+            MESMA ordem de blocos que o layout empilhado (pré-visualização
+            primeiro, formulário depois), que é o que já colocava a imagem no
+            topo em ecrãs estreitos. Não há dois <ScrollView> independentes —
+            as colunas deslizam juntas; a pré-visualização é curta, por isso
+            fica visível durante boa parte do preenchimento. */}
+        <View style={isWideLayout ? styles.wideRow : undefined}>
+          <View style={isWideLayout ? styles.previewColumn : undefined}>
+            {/* PDFs (antes de a extração devolver a página rasterizada) não são
+                renderizáveis por <Image> — mostra um marcador de posição em vez
+                de uma caixa preta. Imagens continuam com a pré-visualização
+                imediata de sempre. */}
+            {isImagePreview ? (
+              <Pressable onPress={() => setPreviewVisible(true)}>
+                <Image
+                  source={{ uri: capture.fileUri }}
+                  style={[styles.preview, isWideLayout && styles.previewWide]}
+                  resizeMode="cover"
+                />
+                <View style={styles.previewBadge}>
+                  <Ionicons name="expand-outline" size={14} color="#fff" />
+                </View>
+              </Pressable>
+            ) : (
+              <View
+                style={[
+                  styles.preview,
+                  isWideLayout && styles.previewWide,
+                  styles.previewPlaceholder,
+                  { backgroundColor: theme.backgroundElement },
+                ]}
+              >
+                <Ionicons name="document-text-outline" size={32} color={theme.textSecondary} />
+                <Text style={[styles.previewPlaceholderText, { color: theme.textSecondary }]}>
+                  {analyzing ? 'A preparar a pré-visualização…' : 'Documento PDF'}
+                </Text>
+              </View>
+            )}
+
+            <View
+              style={[
+                styles.qrBanner,
+                {
+                  backgroundColor: capture.parsedQr
+                    ? '#34C75920'
+                    : capture.ocrFields
+                      ? '#FF9F0A20'
+                      : theme.backgroundElement,
+                },
+              ]}
+            >
+              {analyzing ? (
+                <ActivityIndicator size="small" color={theme.textSecondary} />
+              ) : (
+                <Ionicons
+                  name={capture.parsedQr ? 'checkmark-circle' : capture.ocrFields ? 'text-outline' : 'information-circle-outline'}
+                  size={18}
+                  color={capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary}
+                />
+              )}
+              <Text
+                style={[
+                  styles.qrBannerText,
+                  { color: capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary },
+                ]}
+              >
+                {analyzing
+                  ? 'A analisar a fatura (QR/OCR) — podes ir preenchendo…'
+                  : capture.parsedQr
+                    ? `QR code detetado — ATCUD ${capture.parsedQr.atcud || 'n/d'} · doc. ${capture.parsedQr.documentId || 'n/d'}`
+                    : capture.ocrFields
+                      ? 'Extraído por OCR (sem QR) — confirma os campos preenchidos.'
+                      : 'Sem QR code — preenche os campos manualmente.'}
+              </Text>
             </View>
-          </Pressable>
-        ) : (
-          <View style={[styles.preview, styles.previewPlaceholder, { backgroundColor: theme.backgroundElement }]}>
-            <Ionicons name="document-text-outline" size={32} color={theme.textSecondary} />
-            <Text style={[styles.previewPlaceholderText, { color: theme.textSecondary }]}>
-              {analyzing ? 'A preparar a pré-visualização…' : 'Documento PDF'}
-            </Text>
           </View>
-        )}
 
-        <View
-          style={[
-            styles.qrBanner,
-            {
-              backgroundColor: capture.parsedQr
-                ? '#34C75920'
-                : capture.ocrFields
-                  ? '#FF9F0A20'
-                  : theme.backgroundElement,
-            },
-          ]}
-        >
-          {analyzing ? (
-            <ActivityIndicator size="small" color={theme.textSecondary} />
-          ) : (
-            <Ionicons
-              name={capture.parsedQr ? 'checkmark-circle' : capture.ocrFields ? 'text-outline' : 'information-circle-outline'}
-              size={18}
-              color={capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary}
-            />
-          )}
-          <Text
-            style={[
-              styles.qrBannerText,
-              { color: capture.parsedQr ? theme.success : capture.ocrFields ? '#FF9F0A' : theme.textSecondary },
-            ]}
-          >
-            {analyzing
-              ? 'A analisar a fatura (QR/OCR) — podes ir preenchendo…'
-              : capture.parsedQr
-                ? `QR code detetado — ATCUD ${capture.parsedQr.atcud || 'n/d'} · doc. ${capture.parsedQr.documentId || 'n/d'}`
-                : capture.ocrFields
-                  ? 'Extraído por OCR (sem QR) — confirma os campos preenchidos.'
-                  : 'Sem QR code — preenche os campos manualmente.'}
-          </Text>
-        </View>
+          <View style={isWideLayout ? styles.formColumn : undefined}>
+            <SectionHeader label="Dados da fatura" theme={theme} />
+            <Card theme={theme}>
+              <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
+              <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
+              <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
+              <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
+              <FieldRow theme={theme} label="Data" value={documentDate} onChangeText={setDocumentDate} placeholder="AAAA-MM-DD" />
+              <FieldRow theme={theme} label="Hora" value={documentTime} onChangeText={setDocumentTime} placeholder="HH:MM" last />
+            </Card>
 
-        <SectionHeader label="Dados da fatura" theme={theme} />
-        <Card theme={theme}>
-          <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
-          <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
-          <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
-          <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
-          <FieldRow theme={theme} label="Data" value={documentDate} onChangeText={setDocumentDate} placeholder="AAAA-MM-DD" />
-          <FieldRow theme={theme} label="Hora" value={documentTime} onChangeText={setDocumentTime} placeholder="HH:MM" last />
-        </Card>
+            <SectionHeader label="Moeda" theme={theme} />
+            <CurrencyChipPicker theme={theme} value={currency} onChange={setCurrency} />
 
-        <SectionHeader label="Moeda" theme={theme} />
-        <CurrencyChipPicker theme={theme} value={currency} onChange={setCurrency} />
-
-        <SectionHeader label="Valores" theme={theme} />
-        <Card theme={theme}>
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor sem IVA' : `Valor sem IVA (${currency})`}
-            value={amountBase}
-            onChangeText={setAmountBase}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-          />
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor do IVA' : `Valor do IVA (${currency})`}
-            value={amountVat}
-            onChangeText={setAmountVat}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-          />
-          <FieldRow
-            theme={theme}
-            label={currency === 'EUR' ? 'Valor com IVA' : `Valor com IVA (${currency})`}
-            value={amountTotal}
-            onChangeText={setAmountTotal}
-            keyboardType="decimal-pad"
-            placeholder="0.00"
-            last
-          />
-        </Card>
-
-        {currency !== 'EUR' && (
-          <>
-            <SectionHeader label="Conversão para Euro" theme={theme} />
+            <SectionHeader label="Valores" theme={theme} />
             <Card theme={theme}>
               <FieldRow
                 theme={theme}
-                label="Total em Euro (€)"
-                value={amountTotalEur}
-                onChangeText={setAmountTotalEur}
+                label={currency === 'EUR' ? 'Valor sem IVA' : `Valor sem IVA (${currency})`}
+                value={amountBase}
+                onChangeText={setAmountBase}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+              />
+              <FieldRow
+                theme={theme}
+                label={currency === 'EUR' ? 'Valor do IVA' : `Valor do IVA (${currency})`}
+                value={amountVat}
+                onChangeText={setAmountVat}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+              />
+              <FieldRow
+                theme={theme}
+                label={currency === 'EUR' ? 'Valor com IVA' : `Valor com IVA (${currency})`}
+                value={amountTotal}
+                onChangeText={setAmountTotal}
                 keyboardType="decimal-pad"
                 placeholder="0.00"
                 last
               />
             </Card>
-            {(() => {
-              const preview = convertToEur(amountBase, amountVat, amountTotal, amountTotalEur);
-              return preview ? (
-                <Text style={[styles.conversionPreview, { color: theme.textSecondary }]}>
-                  Em euro: base {preview.amountBase?.toFixed(2) ?? '—'} € · IVA {preview.amountVat?.toFixed(2) ?? '—'} € ·
-                  total {preview.amountTotal.toFixed(2)} €
-                </Text>
-              ) : null;
-            })()}
-          </>
-        )}
 
-        <SectionHeader label="Tipo de despesa" theme={theme} />
-        <CategoryChipPicker theme={theme} value={type} onChange={setType} />
+            {currency !== 'EUR' && (
+              <>
+                <SectionHeader label="Conversão para Euro" theme={theme} />
+                <Card theme={theme}>
+                  <FieldRow
+                    theme={theme}
+                    label="Total em Euro (€)"
+                    value={amountTotalEur}
+                    onChangeText={setAmountTotalEur}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    last
+                  />
+                </Card>
+                {(() => {
+                  const preview = convertToEur(amountBase, amountVat, amountTotal, amountTotalEur);
+                  return preview ? (
+                    <Text style={[styles.conversionPreview, { color: theme.textSecondary }]}>
+                      Em euro: base {preview.amountBase?.toFixed(2) ?? '—'} € · IVA {preview.amountVat?.toFixed(2) ?? '—'} € ·
+                      total {preview.amountTotal.toFixed(2)} €
+                    </Text>
+                  ) : null;
+                })()}
+              </>
+            )}
 
-        {error && (
-          <View style={styles.errorRow}>
-            <Ionicons name="alert-circle" size={16} color={theme.destructive} />
-            <Text style={[styles.errorText, { color: theme.destructive }]}>{error}</Text>
+            <SectionHeader label="Tipo de despesa" theme={theme} />
+            <CategoryChipPicker theme={theme} value={type} onChange={setType} />
+
+            {error && (
+              <View style={styles.errorRow}>
+                <Ionicons name="alert-circle" size={16} color={theme.destructive} />
+                <Text style={[styles.errorText, { color: theme.destructive }]}>{error}</Text>
+              </View>
+            )}
+
+            <Pressable
+              style={[styles.submitButton, { backgroundColor: theme.accent, opacity: submitting ? 0.6 : 1 }]}
+              onPress={() => submitExpense()}
+              disabled={submitting}
+            >
+              <Text style={styles.submitButtonText}>{submitting ? 'A submeter...' : 'Submeter despesa'}</Text>
+            </Pressable>
           </View>
-        )}
-
-        <Pressable
-          style={[styles.submitButton, { backgroundColor: theme.accent, opacity: submitting ? 0.6 : 1 }]}
-          onPress={() => submitExpense()}
-          disabled={submitting}
-        >
-          <Text style={styles.submitButtonText}>{submitting ? 'A submeter...' : 'Submeter despesa'}</Text>
-        </Pressable>
+        </View>
       </ScrollView>
 
       {previewVisible && <PhotoLightbox visible uri={capture.fileUri} onClose={() => setPreviewVisible(false)} />}
@@ -421,9 +454,17 @@ export default function ValidationScreen() {
 
 const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 48, gap: 4 },
+  // Ecrã largo precisa de mais espaço horizontal do que o limite de 800px do
+  // resto da app (webMaxWidthStyle) — duas colunas lado a lado ficariam
+  // apertadas com esse teto.
+  scrollContentWide: { maxWidth: 1100, alignSelf: 'center', width: '100%', paddingHorizontal: 24 },
+  wideRow: { flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 28 },
+  previewColumn: { width: 360 },
+  formColumn: { flex: 1, minWidth: 0 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   centerText: { textAlign: 'center', fontSize: 16 },
   preview: { width: '100%', height: 200, borderRadius: 14 },
+  previewWide: { height: 320 },
   previewPlaceholder: { justifyContent: 'center', alignItems: 'center', gap: 8 },
   previewPlaceholderText: { fontSize: 13, fontWeight: '500' },
   previewBadge: {

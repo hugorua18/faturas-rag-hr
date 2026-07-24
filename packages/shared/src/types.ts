@@ -70,6 +70,14 @@ export interface Expense extends ExpenseInput {
 export const NO_NIF_KEY = 'sem-nif';
 export const NO_DATE_KEY = 'sem-data';
 
+/**
+ * Conta Google da caixa de ingestão de faturas por email. Fonte única para
+ * servidor (dono das despesas/EMAIL, ver gmail-poller.service.ts) e app
+ * (mostra o envelope só a esta conta, ver hooks/use-email-feature.ts) —
+ * manter os dois lados a ler daqui evita divergência silenciosa.
+ */
+export const EMAIL_INGEST_ACCOUNT = 'faturas.rag.hr@gmail.com';
+
 /** Um NIF adquirente + totais agregados de todas as despesas SUBMETIDA desse NIF. */
 export interface AcquirerNifSummary {
   acquirerNif: string;

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { google, type gmail_v1 } from 'googleapis';
 import type { User } from '@prisma/client';
+import { EMAIL_INGEST_ACCOUNT } from '@invoice-scanner/shared';
 import { ingestDocument } from './document-ingest.service';
 import { archiveInvoiceToDriveBestEffort } from './drive.service';
 import { scheduleSheetsSyncSoon } from './sheets-export.service';
@@ -66,28 +67,19 @@ function getGmailClient(): gmail_v1.Gmail | null {
   return google.gmail({ version: 'v1', auth });
 }
 
-// A quem pertencem as despesas ingeridas por email? Desde a Fase 7 (sessões),
-// TODAS as rotas filtram por userId — uma despesa sem dono é invisível na app
-// (foi exatamente esse o bug: o poller criava despesas sem userId e elas nunca
-// apareciam na fila "Tratamento manual"). Preferência: o utilizador cujo email
-// é o da própria caixa monitorizada; senão, se a app só tem um utilizador
-// (é single-user por desenho), é ele.
-// A funcionalidade de email pertence ao utilizador da própria caixa
-// monitorizada (faturas.rag.hr@gmail.com): TODAS as faturas recebidas lá
-// aparecem na fila de tratamento manual dessa conta — os restantes
-// utilizadores da app não têm ingestão por email (o UI esconde-lhes a opção).
-async function resolveIngestUser(gmail: gmail_v1.Gmail): Promise<User | null> {
-  try {
-    const { data } = await gmail.users.getProfile({ userId: 'me' });
-    if (data.emailAddress) {
-      const byEmail = await prisma.user.findUnique({ where: { email: data.emailAddress } });
-      if (byEmail) return byEmail;
-    }
-  } catch {
-    // getProfile é só uma preferência — o fallback abaixo cobre.
-  }
-  const users = await prisma.user.findMany({ take: 2 });
-  return users.length === 1 ? users[0] : null;
+// A quem pertencem as despesas ingeridas por email? A funcionalidade é
+// EXCLUSIVA da conta da própria caixa monitorizada (EMAIL_INGEST_ACCOUNT):
+// todas as faturas recebidas lá aparecem na fila de tratamento manual dessa
+// conta — os restantes utilizadores não têm ingestão por email (o UI
+// esconde-lhes a opção, ver hooks/use-email-feature.ts). Consulta direta à
+// base, sem depender de uma chamada de rede ao Gmail nem de contar
+// utilizadores — a versão anterior fazia gmail.users.getProfile() e recuava
+// para "só há um utilizador", heurística que partia assim que a app passou a
+// ter mais do que uma conta: uma falha transitória da chamada ao Gmail (ex:
+// arranque a frio do Render) deixava as faturas em espera até ao poll
+// seguinte, sem necessidade nenhuma.
+async function resolveIngestUser(): Promise<User | null> {
+  return prisma.user.findUnique({ where: { email: EMAIL_INGEST_ACCOUNT } });
 }
 
 // Devolve true se a mensagem ficou completamente processada. Falhas num anexo
@@ -162,7 +154,7 @@ export async function poll(): Promise<void> {
   const gmail = getGmailClient();
   if (!gmail) return;
 
-  const user = await resolveIngestUser(gmail);
+  const user = await resolveIngestUser();
   if (!user) {
     console.warn(
       '[gmail-poller] nenhum utilizador da app corresponde à caixa monitorizada — faturas de email ficam em espera até haver login.',
