@@ -1,13 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Cache local (neste dispositivo) de nome + última categoria usada por NIF de
-// prestador — evita esperar pelo servidor (histórico/VIES) para NIFs já
-// vistos antes, incluindo quando o servidor gratuito está "a dormir"
-// (arranque a frio ~50s), e pré-preenche a categoria da despesa com a última
-// classificação registada para esse fornecedor (um fornecedor pode ter
-// faturas de mais do que uma categoria ao longo do tempo — guarda-se sempre a
-// mais recente, não um histórico). Guardado como um único blob JSON (não um
-// item por NIF) porque é sempre lido por inteiro (autofill + ecrã "Fornecedores").
+// Cache local (neste dispositivo) de nome + categoria por NIF de prestador —
+// evita esperar pelo servidor (histórico/VIES) para NIFs já vistos antes,
+// incluindo quando o servidor gratuito está "a dormir" (arranque a frio
+// ~50s). `lastType` já não é escrito a cada submissão (ver
+// use-supplier-type-autofill.ts) — a categoria por omissão "a sério" agora
+// vive no servidor (SupplierCategoryDefault, definida só quando o utilizador
+// confirma o pedido "queres usar esta categoria como omissão?"); `lastType`
+// fica só como recuo (bootstrap do histórico via /suppliers/backfill, ou
+// fornecedores vistos antes desta funcionalidade existir). Guardado como um
+// único blob JSON (não um item por NIF) porque é sempre lido por inteiro
+// (autofill + ecrã "Fornecedores").
 const STORAGE_KEY = 'supplier_cache_v2';
 
 interface CachedSupplierRecord {
@@ -49,12 +52,6 @@ export async function setCachedSupplierName(nif: string, name: string): Promise<
 export async function getCachedSupplierType(nif: string): Promise<string | null> {
   const map = await loadCache();
   return map[nif]?.lastType ?? null;
-}
-
-export async function setCachedSupplierType(nif: string, type: string): Promise<void> {
-  const map = await loadCache();
-  map[nif] = { ...map[nif], lastType: type };
-  await persist();
 }
 
 export interface CachedSupplier {

@@ -414,3 +414,21 @@ export async function setSupplierVatDefault(nif: string, vatDeductible: boolean 
   });
   if (!response.ok) throw new Error('Falha ao guardar o valor de IVA do fornecedor');
 }
+
+// Categoria por omissão por NIF de prestador — pré-preenche o ecrã de
+// validação/edição (sempre alterável fatura a fatura, ver
+// hooks/use-supplier-type-autofill.ts).
+export async function listSupplierCategoryDefaults(): Promise<Record<string, string>> {
+  const response = await apiFetch('/supplier-category-defaults');
+  if (!response.ok) throw new Error('Falha ao carregar as categorias por fornecedor');
+  return response.json();
+}
+
+export async function setSupplierCategoryDefault(nif: string, categoryKey: string | null): Promise<void> {
+  const response = await apiFetch(`/supplier-category-defaults/${encodeURIComponent(nif)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ categoryKey }),
+  });
+  if (!response.ok) throw new Error('Falha ao guardar a categoria do fornecedor');
+}

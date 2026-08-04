@@ -7,12 +7,13 @@ import { EXPENSE_TYPE_LABELS, isExpenseType } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { Card, FieldRow } from '@/components/expense-form';
+import { Card, CategoryChipPicker, FieldRow } from '@/components/expense-form';
 import { confirmAction, notify } from '@/utils/alert';
 import { useExpenseCategories } from '@/hooks/use-expense-categories';
 import { useAccountVatSettings } from '@/hooks/use-account-vat-settings';
 import { useSupplierVatDefaults } from '@/hooks/use-supplier-vat-defaults';
-import { setSupplierVatDefault } from '@/api/client';
+import { useSupplierCategoryDefaults } from '@/hooks/use-supplier-category-defaults';
+import { setSupplierCategoryDefault, setSupplierVatDefault } from '@/api/client';
 import {
   listCachedSuppliers,
   removeCachedSupplier,
@@ -48,12 +49,14 @@ export default function SuppliersScreen() {
   const { categories } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
   const { defaults: supplierVatDefaults, reload: reloadVatDefaults } = useSupplierVatDefaults();
+  const { defaults: supplierCategoryDefaults, reload: reloadCategoryDefaults } = useSupplierCategoryDefaults();
   const showVatDefault = vatSettings.vatClassificationEnabled && vatSettings.vatAutoFillMode === 'SUPPLIER';
   const [suppliers, setSuppliers] = useState<CachedSupplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<CachedSupplier | null>(null); // null = fechado; {nif:'', name:''} = a criar
   const [formNif, setFormNif] = useState('');
   const [formName, setFormName] = useState('');
+  const [formCategory, setFormCategory] = useState<string | null>(null);
   const [formVat, setFormVat] = useState<VatChoice>('none');
   const [saving, setSaving] = useState(false);
   const swipeableRefs = useRef<Map<string, Swipeable>>(new Map());
@@ -74,6 +77,7 @@ export default function SuppliersScreen() {
   function openAdd() {
     setFormNif('');
     setFormName('');
+    setFormCategory(null);
     setFormVat('none');
     setEditing({ nif: '', name: '' });
   }
@@ -82,6 +86,7 @@ export default function SuppliersScreen() {
     swipeableRefs.current.get(supplier.nif)?.close();
     setFormNif(supplier.nif);
     setFormName(supplier.name);
+    setFormCategory(supplierCategoryDefaults[supplier.nif] ?? null);
     setFormVat(vatChoiceFromFlag(supplierVatDefaults[supplier.nif]));
     setEditing(supplier);
   }
@@ -106,6 +111,9 @@ export default function SuppliersScreen() {
         await removeCachedSupplier(editing!.nif);
       }
       await setCachedSupplierName(nif, name);
+      if (nifChanged) await setSupplierCategoryDefault(editing!.nif, null);
+      await setSupplierCategoryDefault(nif, formCategory);
+      reloadCategoryDefaults();
       if (showVatDefault) {
         if (nifChanged) await setSupplierVatDefault(editing!.nif, null);
         await setSupplierVatDefault(nif, flagFromVatChoice(formVat));
@@ -148,8 +156,9 @@ export default function SuppliersScreen() {
       />
 
       <Text style={[styles.intro, { color: theme.textSecondary }, webMaxWidthStyle]}>
-        Nomes guardados neste dispositivo para preencher o &quot;Nome do prestador&quot; automaticamente a partir do
-        NIF, sem esperar pelo servidor.
+        Nomes guardados neste dispositivo para preencher o &quot;Nome do prestador&quot; automaticamente. A categoria
+        por omissão sincroniza entre dispositivos e pré-preenche o tipo de despesa — continua sempre alterável em
+        cada fatura.
       </Text>
 
       <FlatList
@@ -193,12 +202,14 @@ export default function SuppliersScreen() {
                 </Text>
                 <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]}>
                   NIF {item.nif}
-                  {item.lastType
-                    ? ` · ${
-                        categories.find((c) => c.key === item.lastType)?.label ??
-                        (isExpenseType(item.lastType) ? EXPENSE_TYPE_LABELS[item.lastType] : item.lastType)
-                      }`
-                    : ''}
+                  {(() => {
+                    const categoryKey = supplierCategoryDefaults[item.nif] ?? item.lastType;
+                    if (!categoryKey) return '';
+                    const label =
+                      categories.find((c) => c.key === categoryKey)?.label ??
+                      (isExpenseType(categoryKey) ? EXPENSE_TYPE_LABELS[categoryKey] : categoryKey);
+                    return ` · ${label}`;
+                  })()}
                   {showVatDefault
                     ? ` · ${
                         supplierVatDefaults[item.nif] === true
@@ -236,6 +247,17 @@ export default function SuppliersScreen() {
               />
               <FieldRow theme={theme} label="Nome" value={formName} onChangeText={setFormName} placeholder="Ex: Restaurante O Manel" last />
             </Card>
+            <View style={styles.categoryLabelRow}>
+              <Text style={[styles.vatLabel, { color: theme.textSecondary }]}>
+                Categoria (pré-preenchimento nas faturas — sempre alterável)
+              </Text>
+              {formCategory && (
+                <Pressable onPress={() => setFormCategory(null)} hitSlop={8}>
+                  <Text style={[styles.clearCategoryText, { color: theme.accent }]}>Remover</Text>
+                </Pressable>
+              )}
+            </View>
+            <CategoryChipPicker theme={theme} value={formCategory} onChange={setFormCategory} categories={categories} />
             {showVatDefault && (
               <>
                 <Text style={[styles.vatLabel, { color: theme.textSecondary }]}>
@@ -290,6 +312,8 @@ const styles = StyleSheet.create({
   rowSubtitle: { fontSize: 13 },
   vatLabel: { fontSize: 12.5, marginTop: 2 },
   vatRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  categoryLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
+  clearCategoryText: { fontSize: 12.5, fontWeight: '600' },
   vatChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   vatChipText: { fontSize: 13.5, fontWeight: '600' },
   deleteAction: {

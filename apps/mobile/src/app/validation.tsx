@@ -23,12 +23,19 @@ import { useSupplierTypeAutofill } from '@/hooks/use-supplier-type-autofill';
 import { useExpenseCategories } from '@/hooks/use-expense-categories';
 import { useAccountVatSettings } from '@/hooks/use-account-vat-settings';
 import { useSupplierVatDefaults } from '@/hooks/use-supplier-vat-defaults';
+import { useSupplierCategoryDefaults } from '@/hooks/use-supplier-category-defaults';
 import { useVatDeductibleAutofill } from '@/hooks/use-vat-deductible-autofill';
 import { useImageAspectRatio } from '@/hooks/use-image-aspect-ratio';
-import { setCachedSupplierType } from '@/state/supplier-cache';
 import { enqueueSubmission } from '@/state/offline-queue';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { createExpense, DuplicateExpenseError, extractDocument, resolveFileUrl, type CapturedFile } from '@/api/client';
+import {
+  createExpense,
+  DuplicateExpenseError,
+  extractDocument,
+  resolveFileUrl,
+  setSupplierCategoryDefault,
+  type CapturedFile,
+} from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
 import {
   Card,
@@ -85,6 +92,11 @@ export default function ValidationScreen() {
   const { categories } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
   const { defaults: supplierVatDefaults } = useSupplierVatDefaults();
+  const {
+    defaults: supplierCategoryDefaults,
+    loading: supplierCategoryDefaultsLoading,
+    reload: reloadSupplierCategoryDefaults,
+  } = useSupplierCategoryDefaults();
   const [vatDeductible, setVatDeductible] = useState<boolean | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierNif, setSupplierNif] = useState('');
@@ -106,9 +118,16 @@ export default function ValidationScreen() {
   // preenchê-lo automaticamente (histórico → VIES) sem sobrepor o que o
   // utilizador escrever.
   const supplierNameLoading = useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
-  // Categoria pré-preenchida com a última classificação usada para este
-  // fornecedor — só cache local, ver use-supplier-type-autofill.
-  useSupplierTypeAutofill(supplierNif, type, setType, categories);
+  // Categoria pré-preenchida a partir da omissão do fornecedor (servidor,
+  // com recuo para o cache local) — ver use-supplier-type-autofill.
+  useSupplierTypeAutofill(
+    supplierNif,
+    type,
+    setType,
+    categories,
+    supplierCategoryDefaults,
+    supplierCategoryDefaultsLoading,
+  );
   // IVA dedutível pré-preenchido a partir do fornecedor ou da categoria,
   // conforme escolhido em /vat-settings — ver use-vat-deductible-autofill.
   useVatDeductibleAutofill(
@@ -294,16 +313,40 @@ export default function ValidationScreen() {
         ? { uri: capture.fileUri, name: `fatura.${capture.fileMimeType.split('/')[1] ?? 'jpg'}`, mimeType: capture.fileMimeType }
         : undefined;
 
+    // Fornecedor novo (ou ainda sem categoria assinalada no servidor): pede
+    // confirmação antes de a definir como omissão para as próximas faturas —
+    // ao contrário do IVA dedutível (aprendizagem silenciosa quando o modo
+    // automático está ligado), aqui pergunta-se sempre, porque não há nenhuma
+    // flag de conta a ativar este comportamento. "onDone" só corre depois de
+    // resolvido (Sim/Não), para a navegação nunca acontecer antes do diálogo.
+    function promptSupplierCategoryDefaultIfNeeded(onDone: () => void) {
+      const nif = supplierNif.trim();
+      if (!/^\d{9}$/.test(nif) || !type || supplierCategoryDefaults[nif] !== undefined) {
+        onDone();
+        return;
+      }
+      const categoryLabel = categories.find((c) => c.key === type)?.label ?? type;
+      confirmAction(
+        'Categoria por omissão',
+        `Queres usar "${categoryLabel}" como categoria pré-definida para faturas de ${supplierName.trim() || `NIF ${nif}`}? Aparece já escolhida da próxima vez — continuas sempre a poder mudar em cada fatura.`,
+        'Definir',
+        () => {
+          void setSupplierCategoryDefault(nif, type).then(() => reloadSupplierCategoryDefaults());
+          onDone();
+        },
+        onDone,
+      );
+    }
+
     async function fallBackToOfflineQueue(): Promise<boolean> {
       if (Platform.OS === 'web' || !file || !(await isOffline())) return false;
       if (!(await queueForLater(file, input))) return false;
-      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       notify(
         'Guardada para envio automático',
         'Sem ligação à internet — a fatura fica guardada no telemóvel e é submetida automaticamente assim que a ligação voltar.',
       );
-      router.replace('/expenses');
+      promptSupplierCategoryDefaultIfNeeded(() => router.replace('/expenses'));
       return true;
     }
 
@@ -315,9 +358,8 @@ export default function ValidationScreen() {
       if (await fallBackToOfflineQueue()) return;
 
       await createExpense(input, file, replaceExpenseId, capture?.existingFilePath);
-      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.replace('/expenses');
+      promptSupplierCategoryDefaultIfNeeded(() => router.replace('/expenses'));
     } catch (err) {
       if (err instanceof DuplicateExpenseError) {
         setSubmitting(false);

@@ -26,6 +26,7 @@ model User {
   expenseCategories     ExpenseCategory[]
   acquirerNifDisplays   AcquirerNifDisplay[]
   supplierVatDefaults   SupplierVatDefault[]
+  supplierCategoryDefaults SupplierCategoryDefault[]
 
   // Classificação de IVA dedutível por fatura — desativada por omissão (produto
   // pré-existente nunca pediu isto). Quando ativa, POST/PATCH /expenses passam a
@@ -179,6 +180,27 @@ model SupplierVatDefault {
   vatDeductible Boolean
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@unique([userId, supplierNif])
+}
+
+// Categoria por omissão por NIF de PRESTADOR (fornecedor) — pré-preenche o
+// ecrã de validação/edição (sempre alterável fatura a fatura). Ao contrário do
+// SupplierVatDefault (aprendizagem silenciosa, condicionada a uma flag de
+// conta), este valor só é gravado quando o utilizador confirma explicitamente
+// um pedido "queres usar esta categoria como omissão para este fornecedor?",
+// mostrado quando o fornecedor ainda não tem nenhuma linha aqui — ver
+// hooks/use-supplier-category-defaults.ts e validation.tsx. `categoryKey` é
+// uma string solta (sem FK), tal como Expense.type — uma categoria apagada
+// entretanto simplesmente deixa de bater com nenhum chip.
+model SupplierCategoryDefault {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  supplierNif String
+  categoryKey String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@unique([userId, supplierNif])
 }

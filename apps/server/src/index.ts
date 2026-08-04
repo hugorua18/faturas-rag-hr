@@ -7,6 +7,7 @@ import { categoriesRouter } from './routes/categories';
 import { acquirerNifDisplaysRouter } from './routes/acquirer-nif-displays';
 import { accountSettingsRouter } from './routes/account-settings';
 import { supplierVatDefaultsRouter } from './routes/supplier-vat-defaults';
+import { supplierCategoryDefaultsRouter } from './routes/supplier-category-defaults';
 import { authRouter } from './routes/auth';
 import { requireAuth } from './middleware/require-auth';
 import { startGmailPolling } from './services/gmail-poller.service';
@@ -117,6 +118,7 @@ app.use('/categories', requireAuth, categoriesRouter);
 app.use('/acquirer-nif-displays', requireAuth, acquirerNifDisplaysRouter);
 app.use('/account-settings', requireAuth, accountSettingsRouter);
 app.use('/supplier-vat-defaults', requireAuth, supplierVatDefaultsRouter);
+app.use('/supplier-category-defaults', requireAuth, supplierCategoryDefaultsRouter);
 
 // Apanha erros do multer (ex: fileFilter a rejeitar um tipo de ficheiro não
 // suportado) e do CORS, devolvendo um JSON limpo em vez do handler por

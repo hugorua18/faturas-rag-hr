@@ -23,10 +23,10 @@ import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
 import { useSupplierTypeAutofill } from '@/hooks/use-supplier-type-autofill';
 import { useExpenseCategories } from '@/hooks/use-expense-categories';
 import { useAccountVatSettings } from '@/hooks/use-account-vat-settings';
+import { useSupplierCategoryDefaults } from '@/hooks/use-supplier-category-defaults';
 import { useImageAspectRatio } from '@/hooks/use-image-aspect-ratio';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { deleteExpense, getExpense, resolveFileUrl, updateExpense } from '@/api/client';
-import { setCachedSupplierType } from '@/state/supplier-cache';
+import { deleteExpense, getExpense, resolveFileUrl, setSupplierCategoryDefault, updateExpense } from '@/api/client';
 import {
   Card,
   CategoryChipPicker,
@@ -66,6 +66,11 @@ export default function ExpenseDetailScreen() {
   const [type, setType] = useState<string | null>(null);
   const { categories } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
+  const {
+    defaults: supplierCategoryDefaults,
+    loading: supplierCategoryDefaultsLoading,
+    reload: reloadSupplierCategoryDefaults,
+  } = useSupplierCategoryDefaults();
   const [vatDeductible, setVatDeductible] = useState<boolean | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierNif, setSupplierNif] = useState('');
@@ -88,10 +93,18 @@ export default function ExpenseDetailScreen() {
   // manual"), onde o nome vem quase sempre vazio — preenche a partir do NIF
   // (histórico → VIES) sem sobrepor edições do utilizador.
   const supplierNameLoading = useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
-  // Categoria pré-preenchida com a última classificação usada para este
-  // fornecedor — relevante sobretudo em despesas de "Tratamento manual"
-  // (email/OCR), que chegam sem categoria; nunca sobrepõe a já carregada.
-  useSupplierTypeAutofill(supplierNif, type, setType, categories);
+  // Categoria pré-preenchida a partir da omissão do fornecedor (servidor, com
+  // recuo para o cache local) — relevante sobretudo em despesas de
+  // "Tratamento manual" (email/OCR), que chegam sem categoria; nunca sobrepõe
+  // a já carregada.
+  useSupplierTypeAutofill(
+    supplierNif,
+    type,
+    setType,
+    categories,
+    supplierCategoryDefaults,
+    supplierCategoryDefaultsLoading,
+  );
 
   const loadExpense = useCallback(() => {
     if (!id) return;
@@ -200,7 +213,6 @@ export default function ExpenseDetailScreen() {
     setSaved(false);
     try {
       const updated = await updateExpense(id, result.data);
-      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       setExpense(updated);
       setSaved(true);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -210,6 +222,29 @@ export default function ExpenseDetailScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  // Fornecedor novo (ou ainda sem categoria assinalada no servidor): pede
+  // confirmação antes de a definir como omissão para as próximas faturas — só
+  // ao confirmar "Tratamento manual" (primeira vez que esta fatura fica
+  // classificada), não em edições soltas de faturas já submetidas.
+  function promptSupplierCategoryDefaultIfNeeded(onDone: () => void) {
+    const nif = supplierNif.trim();
+    if (!/^\d{9}$/.test(nif) || !type || supplierCategoryDefaults[nif] !== undefined) {
+      onDone();
+      return;
+    }
+    const categoryLabel = categories.find((c) => c.key === type)?.label ?? type;
+    confirmAction(
+      'Categoria por omissão',
+      `Queres usar "${categoryLabel}" como categoria pré-definida para faturas de ${supplierName.trim() || `NIF ${nif}`}? Aparece já escolhida da próxima vez — continuas sempre a poder mudar em cada fatura.`,
+      'Definir',
+      () => {
+        void setSupplierCategoryDefault(nif, type).then(() => reloadSupplierCategoryDefaults());
+        onDone();
+      },
+      onDone,
+    );
   }
 
   async function handleConfirmPending() {
@@ -227,9 +262,8 @@ export default function ExpenseDetailScreen() {
     setError(null);
     try {
       await updateExpense(id, { ...result.data, status: 'SUBMETIDA' });
-      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      router.back();
+      promptSupplierCategoryDefaultIfNeeded(() => router.back());
     } catch (err) {
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setError(err instanceof Error ? err.message : 'Falha ao confirmar a despesa');

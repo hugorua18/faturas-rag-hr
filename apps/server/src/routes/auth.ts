@@ -164,6 +164,7 @@ authRouter.delete('/account', requireAuth, async (req, res) => {
     await prisma.expenseCategory.deleteMany({ where: { userId } });
     await prisma.acquirerNifDisplay.deleteMany({ where: { userId } });
     await prisma.supplierVatDefault.deleteMany({ where: { userId } });
+    await prisma.supplierCategoryDefault.deleteMany({ where: { userId } });
     await prisma.session.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
     console.log(`[auth] conta eliminada: ${req.user!.email}`);
