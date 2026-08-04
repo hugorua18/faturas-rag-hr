@@ -21,7 +21,7 @@ export default function ExpensesLayout() {
           porque o sistema nativo só ajusta automaticamente o espaço do
           conteúdo quando a lista é o filho direto do ecrã — aqui há outros
           elementos (spinner, erro) antes dela. Título normal é fiável. */}
-      <Stack.Screen name="index" options={{ title: 'Escolha o NIF' }} />
+      <Stack.Screen name="index" options={{ title: 'Escolha a Entidade' }} />
       <Stack.Screen name="[nif]/index" options={{ title: 'Meses' }} />
       <Stack.Screen name="[nif]/[period]" options={{ title: 'Despesas' }} />
     </Stack>

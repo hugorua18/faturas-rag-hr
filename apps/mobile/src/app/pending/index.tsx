@@ -2,12 +2,13 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { EXPENSE_TYPE_LABELS, type Expense, type ExpenseType } from '@invoice-scanner/shared';
+import { EXPENSE_TYPE_LABELS, isExpenseType, type Expense } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { webMaxWidthStyle } from '@/constants/theme';
 import { listExpenses, resolveFileUrl, syncEmailIngestion } from '@/api/client';
-import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { DEFAULT_EXPENSE_TYPE_ICON, EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { useExpenseCategories } from '@/hooks/use-expense-categories';
 import { formatCurrency } from '@/utils/format';
 
 const SOURCE_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -18,6 +19,7 @@ const SOURCE_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
 
 export default function PendingReviewListScreen() {
   const theme = useTheme();
+  const { categories } = useExpenseCategories();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -92,7 +94,9 @@ export default function PendingReviewListScreen() {
           ) : null
         }
         renderItem={({ item }) => {
-          const type = item.type as ExpenseType;
+          const type = item.type;
+          const categoryLabel =
+            categories.find((c) => c.key === type)?.label ?? (isExpenseType(type) ? EXPENSE_TYPE_LABELS[type] : type);
           return (
             <Pressable
               style={[styles.row, { backgroundColor: theme.card }, Platform.OS === 'web' && { cursor: 'pointer' }]}
@@ -102,7 +106,7 @@ export default function PendingReviewListScreen() {
                 <Image source={{ uri: resolveFileUrl(item.fileUrl) }} style={styles.thumb} />
               ) : (
                 <View style={[styles.thumb, styles.thumbPlaceholder, { backgroundColor: theme.backgroundElement }]}>
-                  <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? 'document-outline'} size={20} color={theme.textSecondary} />
+                  <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? DEFAULT_EXPENSE_TYPE_ICON} size={20} color={theme.textSecondary} />
                 </View>
               )}
               <View style={styles.rowInfo}>
@@ -113,7 +117,7 @@ export default function PendingReviewListScreen() {
                   <Ionicons name={SOURCE_ICONS[item.source] ?? 'document-outline'} size={12} color={theme.textSecondary} />
                   <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]}>
                     {' '}
-                    {EXPENSE_TYPE_LABELS[type] ?? item.type} · {item.documentDate || 'sem data'}
+                    {categoryLabel} · {item.documentDate || 'sem data'}
                   </Text>
                 </View>
               </View>

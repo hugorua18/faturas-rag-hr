@@ -4,7 +4,12 @@ import { Router } from 'express';
 import { prisma } from '../db/prisma';
 import { requireAuth } from '../middleware/require-auth';
 import { resolveSafeUploadPath } from '../utils/uploads-path';
-import { encryptRefreshToken, exchangeAuthCodeForTokens, verifyGoogleIdToken } from '../services/google-auth.service';
+import {
+  decryptRefreshToken,
+  encryptRefreshToken,
+  exchangeAuthCodeForTokens,
+  verifyGoogleIdToken,
+} from '../services/google-auth.service';
 
 export const authRouter = Router();
 
@@ -126,10 +131,10 @@ authRouter.get('/me', requireAuth, async (req, res) => {
 authRouter.delete('/account', requireAuth, async (req, res) => {
   const userId = req.user!.id;
   try {
-    const expenses = await prisma.expense.findMany({
-      where: { userId },
-      select: { originalFilePath: true },
-    });
+    const [expenses, user] = await Promise.all([
+      prisma.expense.findMany({ where: { userId }, select: { originalFilePath: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshTokenEnc: true } }),
+    ]);
     for (const expense of expenses) {
       const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
       if (!absolutePath) continue;
@@ -139,7 +144,26 @@ authRouter.delete('/account', requireAuth, async (req, res) => {
         // best-effort: o disco do Render é efémero, o ficheiro pode já não existir
       }
     }
+    // Revoga a autorização OAuth do lado da Google — sem isto, a app deixa de
+    // conseguir usá-la mas a autorização continua ativa em myaccount.google.com
+    // até o utilizador a remover manualmente (guideline 5.1.1(v) exige um
+    // mecanismo de revogação a partir da própria app).
+    if (user?.googleRefreshTokenEnc) {
+      try {
+        const refreshToken = decryptRefreshToken(user.googleRefreshTokenEnc);
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, {
+          method: 'POST',
+        });
+      } catch (err) {
+        // best-effort: não bloqueia a eliminação da conta se a Google não responder
+        console.error(`[auth] falha ao revogar token Google ao eliminar conta ${req.user!.email}`, err);
+      }
+    }
     await prisma.expense.deleteMany({ where: { userId } });
+    await prisma.monthlyReportStatus.deleteMany({ where: { userId } });
+    await prisma.expenseCategory.deleteMany({ where: { userId } });
+    await prisma.acquirerNifDisplay.deleteMany({ where: { userId } });
+    await prisma.supplierVatDefault.deleteMany({ where: { userId } });
     await prisma.session.deleteMany({ where: { userId } });
     await prisma.user.delete({ where: { id: userId } });
     console.log(`[auth] conta eliminada: ${req.user!.email}`);

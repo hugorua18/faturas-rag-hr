@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import pdfMake from 'pdfmake';
 import type { Content } from 'pdfmake/interfaces';
-import { EXPENSE_TYPE_LABELS, REPORT_STATUS_LABELS, type ExpenseType, type ReportStatus } from '@invoice-scanner/shared';
+import { REPORT_STATUS_LABELS, type ExpenseCategory, type ReportStatus } from '@invoice-scanner/shared';
 import { resolveSafeUploadPath } from '../utils/uploads-path';
 import { fetchDriveFileBuffer } from './drive.service';
+import { categoryLabel, shouldShowVatDeductible, toCategoryMap, vatDeductibleLabel } from './report-category-labels';
 
 export interface ReportUser {
   googleRefreshTokenEnc: string | null;
@@ -13,7 +14,8 @@ export interface ReportUser {
 export interface ExpenseForReport {
   id: string;
   driveFileId: string | null;
-  type: ExpenseType;
+  /** Chave de uma categoria do utilizador (ExpenseCategory.key) — não é mais um enum fixo. */
+  type: string;
   supplierName: string | null;
   supplierNif: string | null;
   documentId: string | null;
@@ -22,6 +24,8 @@ export interface ExpenseForReport {
   amountVat: number | null;
   amountTotal: number | null;
   originalFilePath: string | null;
+  /** null = não classificada — congelada no momento da submissão, nunca derivada da categoria. */
+  vatDeductible: boolean | null;
 }
 
 pdfMake.setFonts({ Helvetica: require('pdfmake/standard-fonts/Helvetica').Helvetica });
@@ -68,15 +72,24 @@ async function readImageAsDataUrl(expense: ExpenseForReport, user: ReportUser | 
 
 // Resumo pedido pelo utilizador: por mês (e ano) × tipo de despesa — nº de
 // documentos, base (sem IVA), IVA e total (com IVA). Aparece no início do
-// relatório, antes do detalhe documento a documento.
-function buildSummaryContent(expenses: ExpenseForReport[]): Content[] {
+// relatório, antes do detalhe documento a documento. Com a coluna de IVA
+// dedutível ativa, agrupa também por essa classificação — cada fatura tem a
+// sua própria (Expense.vatDeductible), por isso um mês+tipo pode ter faturas
+// com valores diferentes e uma única linha deixaria de ser homogénea.
+function buildSummaryContent(expenses: ExpenseForReport[], categories: ExpenseCategory[], showVat: boolean): Content[] {
   if (expenses.length === 0) return [];
 
-  const groups = new Map<string, { count: number; base: number; vat: number; total: number }>();
+  const categoryMap = toCategoryMap(categories);
+
+  const groups = new Map<
+    string,
+    { count: number; base: number; vat: number; total: number; vatDeductible: boolean | null }
+  >();
   for (const e of expenses) {
     const month = e.documentDate ? e.documentDate.slice(0, 7) : 'Sem data';
-    const key = `${month}|${e.type}`;
-    const entry = groups.get(key) ?? { count: 0, base: 0, vat: 0, total: 0 };
+    const vatDeductible = e.vatDeductible ?? null;
+    const key = showVat ? `${month}|${e.type}|${String(vatDeductible)}` : `${month}|${e.type}`;
+    const entry = groups.get(key) ?? { count: 0, base: 0, vat: 0, total: 0, vatDeductible };
     entry.count += 1;
     entry.base += e.amountBase ?? 0;
     entry.vat += e.amountVat ?? 0;
@@ -87,7 +100,7 @@ function buildSummaryContent(expenses: ExpenseForReport[]): Content[] {
   const rows = Array.from(groups.entries())
     .map(([key, stats]) => {
       const [month, type] = key.split('|');
-      return { month, type: type as ExpenseType, ...stats };
+      return { month, type, ...stats };
     })
     .sort((a, b) => a.month.localeCompare(b.month) || a.type.localeCompare(b.type));
 
@@ -96,27 +109,35 @@ function buildSummaryContent(expenses: ExpenseForReport[]): Content[] {
     { count: 0, base: 0, vat: 0, total: 0 },
   );
 
-  const headerCells = ['Mês', 'Tipo', 'Documentos', 'Base (s/ IVA)', 'IVA', 'Total (c/ IVA)'].map((text) => ({
-    text,
-    bold: true,
-    fillColor: '#f0f0f0',
-  }));
+  const vatDeductibleTotals = expenses.reduce(
+    (acc, e) => {
+      if (e.vatDeductible === true) acc.deductible += e.amountVat ?? 0;
+      else if (e.vatDeductible === false) acc.nonDeductible += e.amountVat ?? 0;
+      return acc;
+    },
+    { deductible: 0, nonDeductible: 0 },
+  );
+
+  const headerLabels = ['Mês', 'Tipo', 'Documentos', 'Base (s/ IVA)', 'IVA', 'Total (c/ IVA)'];
+  if (showVat) headerLabels.push('IVA Dedutível');
+  const headerCells = headerLabels.map((text) => ({ text, bold: true, fillColor: '#f0f0f0' }));
 
   return [
     { text: 'Resumo', style: 'sectionTitle' },
     {
       table: {
         headerRows: 1,
-        widths: ['auto', '*', 'auto', 'auto', 'auto', 'auto'],
+        widths: showVat ? ['auto', '*', 'auto', 'auto', 'auto', 'auto', 'auto'] : ['auto', '*', 'auto', 'auto', 'auto', 'auto'],
         body: [
           headerCells,
           ...rows.map((r) => [
             r.month,
-            EXPENSE_TYPE_LABELS[r.type] ?? r.type,
+            categoryLabel(categoryMap, r.type),
             { text: String(r.count), alignment: 'right' },
             { text: currency(r.base), alignment: 'right' },
             { text: currency(r.vat), alignment: 'right' },
             { text: currency(r.total), alignment: 'right' },
+            ...(showVat ? [{ text: vatDeductibleLabel(r.vatDeductible), alignment: 'center' as const }] : []),
           ]),
           [
             { text: 'Total', bold: true },
@@ -125,12 +146,24 @@ function buildSummaryContent(expenses: ExpenseForReport[]): Content[] {
             { text: currency(totals.base), alignment: 'right', bold: true },
             { text: currency(totals.vat), alignment: 'right', bold: true },
             { text: currency(totals.total), alignment: 'right', bold: true },
+            ...(showVat ? [''] : []),
           ],
         ],
       },
       layout: 'lightHorizontalLines',
-      margin: [0, 0, 0, 20],
+      margin: [0, 0, 0, showVat ? 4 : 20],
     } as Content,
+    ...(showVat
+      ? [
+          {
+            text:
+              `IVA dedutível: ${currency(vatDeductibleTotals.deductible)}` +
+              `   ·   IVA não dedutível: ${currency(vatDeductibleTotals.nonDeductible)}`,
+            style: 'itemMeta',
+            margin: [0, 0, 0, 20] as [number, number, number, number],
+          } as Content,
+        ]
+      : []),
   ];
 }
 
@@ -144,8 +177,12 @@ export async function buildMonthlyReportPdf(
   status: ReportStatus | null,
   expenses: ExpenseForReport[],
   user: ReportUser | null = null,
+  categories: ExpenseCategory[] = [],
+  vatClassificationEnabled = false,
 ): Promise<Buffer> {
   const total = expenses.reduce((sum, e) => sum + (e.amountTotal ?? 0), 0);
+  const categoryMap = toCategoryMap(categories);
+  const showVat = shouldShowVatDeductible(vatClassificationEnabled);
 
   const content: Content[] = [
     { text: 'Relatório de despesas', style: 'title' },
@@ -153,7 +190,7 @@ export async function buildMonthlyReportPdf(
     { text: `Período: ${periodLabel}`, style: 'subtitle' },
     ...(status ? [{ text: `Estado: ${REPORT_STATUS_LABELS[status]}`, style: 'subtitle' }] : []),
     { text: `Total: ${currency(total)} · ${expenses.length} documento(s)`, style: 'subtitle', margin: [0, 0, 0, 16] },
-    ...buildSummaryContent(expenses),
+    ...buildSummaryContent(expenses, categories, showVat),
     ...(expenses.length > 0 ? [{ text: 'Documentos', style: 'sectionTitle' } as Content] : []),
   ];
 
@@ -162,11 +199,12 @@ export async function buildMonthlyReportPdf(
     const details = [
       { text: expense.supplierName || 'Fornecedor não indicado', style: 'itemTitle' },
       {
-        text: `${EXPENSE_TYPE_LABELS[expense.type] ?? expense.type} · ${expense.documentDate || 'sem data'}`,
+        text: `${categoryLabel(categoryMap, expense.type)} · ${expense.documentDate || 'sem data'}`,
         style: 'itemMeta',
       },
       expense.supplierNif ? { text: `NIF fornecedor: ${expense.supplierNif}`, style: 'itemMeta' } : null,
       expense.documentId ? { text: `Nº documento: ${expense.documentId}`, style: 'itemMeta' } : null,
+      showVat ? { text: `IVA dedutível: ${vatDeductibleLabel(expense.vatDeductible)}`, style: 'itemMeta' } : null,
       {
         text: `Base: ${currency(expense.amountBase)}   IVA: ${currency(expense.amountVat)}   Total: ${currency(expense.amountTotal)}`,
         style: 'itemAmounts',

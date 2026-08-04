@@ -1,9 +1,11 @@
 import { Platform } from 'react-native';
 import { router } from 'expo-router';
 import type {
+  AccountVatSettings,
   AcquirerNifSummary,
   DuplicateExpenseResponse,
   Expense,
+  ExpenseCategory,
   ExpenseInput,
   ExpenseStatus,
   MonthlySummary,
@@ -101,6 +103,9 @@ export async function createExpense(
   if (input.amountVat !== undefined) formData.append('amountVat', String(input.amountVat));
   if (input.amountTotal !== undefined) formData.append('amountTotal', String(input.amountTotal));
   if (input.qrRawPayload) formData.append('qrRawPayload', input.qrRawPayload);
+  if (input.vatDeductible !== undefined && input.vatDeductible !== null) {
+    formData.append('vatDeductible', String(input.vatDeductible));
+  }
   if (replaceExpenseId) formData.append('replaceExpenseId', replaceExpenseId);
 
   if (file) {
@@ -159,6 +164,18 @@ export async function syncEmailIngestion(): Promise<void> {
 export async function lookupSupplierName(nif: string): Promise<{ name: string | null; source: string | null }> {
   const response = await apiFetch(`/suppliers/lookup?nif=${encodeURIComponent(nif)}`);
   if (!response.ok) throw new Error('Falha ao procurar o NIF');
+  return response.json();
+}
+
+export interface SupplierBackfillEntry {
+  nif: string;
+  name: string;
+  lastType: string | null;
+}
+
+export async function fetchSupplierBackfill(): Promise<SupplierBackfillEntry[]> {
+  const response = await apiFetch('/suppliers/backfill');
+  if (!response.ok) throw new Error('Falha ao carregar fornecedores');
   return response.json();
 }
 
@@ -296,4 +313,104 @@ export async function deleteAccount(): Promise<void> {
   if (!response.ok) throw new Error('Falha ao eliminar a conta');
   await clearSessionToken();
   router.replace('/login');
+}
+
+// Categorias de despesa personalizadas por utilizador (ver /categories no
+// servidor) — cada utilizador tem a sua própria lista, semeada a partir das
+// categorias fixas antigas na primeira vez que é pedida.
+export async function listCategories(): Promise<ExpenseCategory[]> {
+  const response = await apiFetch('/categories');
+  if (!response.ok) throw new Error('Falha ao carregar categorias');
+  return response.json();
+}
+
+export async function createCategory(input: { label: string; vatDeductible?: boolean | null }): Promise<ExpenseCategory> {
+  const response = await apiFetch('/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error('Falha ao criar categoria');
+  return response.json();
+}
+
+export async function updateCategory(
+  id: string,
+  input: { label?: string; vatDeductible?: boolean | null },
+): Promise<ExpenseCategory> {
+  const response = await apiFetch(`/categories/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error('Falha ao atualizar categoria');
+  return response.json();
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  const response = await apiFetch(`/categories/${id}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error('Falha ao remover categoria');
+}
+
+export interface AcquirerNifDisplay {
+  label?: string;
+  icon?: string;
+}
+
+// Etiqueta + ícone personalizados por NIF de adquirente — guardado no
+// servidor (não no dispositivo) para sincronizar entre iOS e Web.
+export async function listAcquirerNifDisplays(): Promise<Record<string, AcquirerNifDisplay>> {
+  const response = await apiFetch('/acquirer-nif-displays');
+  if (!response.ok) throw new Error('Falha ao carregar etiquetas de NIF');
+  const data = (await response.json()) as Record<string, { label: string | null; icon: string | null }>;
+  const result: Record<string, AcquirerNifDisplay> = {};
+  for (const [nif, { label, icon }] of Object.entries(data)) {
+    result[nif] = { label: label ?? undefined, icon: icon ?? undefined };
+  }
+  return result;
+}
+
+export async function setAcquirerNifDisplay(nif: string, display: AcquirerNifDisplay): Promise<void> {
+  const response = await apiFetch(`/acquirer-nif-displays/${encodeURIComponent(nif)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(display),
+  });
+  if (!response.ok) throw new Error('Falha ao guardar etiqueta do NIF');
+}
+
+// Definições de conta para a classificação de IVA dedutível — desativada por
+// omissão (ver AccountVatSettings em @invoice-scanner/shared).
+export async function getAccountVatSettings(): Promise<AccountVatSettings> {
+  const response = await apiFetch('/account-settings');
+  if (!response.ok) throw new Error('Falha ao carregar as definições de IVA');
+  return response.json();
+}
+
+export async function updateAccountVatSettings(input: Partial<AccountVatSettings>): Promise<AccountVatSettings> {
+  const response = await apiFetch('/account-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error('Falha ao guardar as definições de IVA');
+  return response.json();
+}
+
+// Valor de IVA dedutível aprendido por NIF de prestador — só relevante quando
+// AccountVatSettings.vatAutoFillMode = "SUPPLIER" (ver
+// hooks/use-vat-deductible-autofill.ts).
+export async function listSupplierVatDefaults(): Promise<Record<string, boolean>> {
+  const response = await apiFetch('/supplier-vat-defaults');
+  if (!response.ok) throw new Error('Falha ao carregar os valores de IVA por fornecedor');
+  return response.json();
+}
+
+export async function setSupplierVatDefault(nif: string, vatDeductible: boolean | null): Promise<void> {
+  const response = await apiFetch(`/supplier-vat-defaults/${encodeURIComponent(nif)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vatDeductible }),
+  });
+  if (!response.ok) throw new Error('Falha ao guardar o valor de IVA do fornecedor');
 }

@@ -11,7 +11,6 @@
     ],
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.hugorua.invoicescanner",
       "buildNumber": "23",
       "infoPlist": {
@@ -41,8 +40,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ]
     },
     "web": {
@@ -50,17 +48,26 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "headers": {
+            "Cache-Control": "no-store"
+          }
+        }
+      ],
       [
         "expo-camera",
         {
-          "cameraPermission": "Esta app precisa de acesso à câmara para digitalizar faturas."
+          "cameraPermission": "Esta app precisa de acesso à câmara para digitalizar faturas.",
+          "microphonePermission": false
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Esta app acede às fotos que escolheres para importar faturas."
+          "photosPermission": "Esta app acede às fotos que escolheres para importar faturas.",
+          "microphonePermission": false
         }
       ],
       [
@@ -73,7 +80,12 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
       "@react-native-community/datetimepicker"
     ],
     "experiments": {

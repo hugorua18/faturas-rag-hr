@@ -5,7 +5,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { User } from '@prisma/client';
 import {
-  isExpenseType,
   isExpenseStatus,
   isReportStatus,
   isCurrencyCode,
@@ -17,6 +16,8 @@ import {
 } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { ingestDocument } from '../services/document-ingest.service';
+import { isValidCategoryKey } from '../services/expense-categories.service';
+import { learnVatDeductible } from '../services/vat-learning.service';
 import { archiveInvoiceToDriveBestEffort } from '../services/drive.service';
 import { scheduleSheetsSyncSoon } from '../services/sheets-export.service';
 import { triggerPoll } from '../services/gmail-poller.service';
@@ -77,6 +78,14 @@ function toOptionalFloat(value: unknown): number | undefined {
 
 function nifFilterValue(nifParam: string): string | null {
   return nifParam === NO_NIF_KEY ? null : nifParam;
+}
+
+// POST vem sempre como multipart/form-data (ver upload.single('file') abaixo)
+// — "true"/"false" chegam como string, nunca como boolean nativo.
+function toOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return undefined;
 }
 
 function deleteUploadedFile(originalFilePath: string | null | undefined): void {
@@ -220,7 +229,7 @@ expensesRouter.get('/:id', async (req, res) => {
 expensesRouter.post('/', upload.single('file'), async (req, res) => {
   const body = req.body as Record<string, string>;
 
-  if (!body.type || !isExpenseType(body.type)) {
+  if (!body.type || !(await isValidCategoryKey(req.user!.id, body.type))) {
     res.status(400).json({ error: 'Tipo de despesa inválido' });
     return;
   }
@@ -259,6 +268,15 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
   }
   if (!nifsAreDistinct(body.supplierNif, body.acquirerNif)) {
     res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
+    return;
+  }
+
+  // Classificação de IVA dedutível: só obrigatória quando a conta a tem ativa
+  // (User.vatClassificationEnabled) — para quem nunca a liga, o fluxo é
+  // exatamente o de sempre.
+  const postVatDeductible = toOptionalBoolean(body.vatDeductible);
+  if (req.user!.vatClassificationEnabled && postVatDeductible === undefined) {
+    res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
     return;
   }
 
@@ -313,18 +331,20 @@ expensesRouter.post('/', upload.single('file'), async (req, res) => {
       // Upload manual/email já processado por /expenses/extract ou pelo poller do
       // Gmail — o ficheiro já está em uploads/, não é preciso reenviar os bytes.
       originalFilePath: req.file ? `uploads/${req.file.filename}` : body.existingFilePath || undefined,
+      vatDeductible: postVatDeductible ?? null,
     },
   });
 
   archiveInvoiceToDriveBestEffort(req.user!, expense);
   scheduleSheetsSyncSoon(req.user!.id);
+  void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
 
   res.status(201).json(toExpenseJson(expense));
 });
 
 expensesRouter.patch('/:id', async (req, res) => {
   const body = req.body as Record<string, unknown>;
-  if (body.type !== undefined && !isExpenseType(String(body.type))) {
+  if (body.type !== undefined && !(await isValidCategoryKey(req.user!.id, String(body.type)))) {
     res.status(400).json({ error: 'Tipo de despesa inválido' });
     return;
   }
@@ -334,6 +354,10 @@ expensesRouter.patch('/:id', async (req, res) => {
   }
   if (body.currency !== undefined && !isCurrencyCode(String(body.currency))) {
     res.status(400).json({ error: 'Moeda inválida' });
+    return;
+  }
+  if (body.vatDeductible !== undefined && body.vatDeductible !== null && typeof body.vatDeductible !== 'boolean') {
+    res.status(400).json({ error: 'vatDeductible tem de ser true, false ou null' });
     return;
   }
 
@@ -358,6 +382,14 @@ expensesRouter.patch('/:id', async (req, res) => {
     }
     if (!amountsAreConsistent(nextBase, nextVat, nextTotal)) {
       res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
+      return;
+    }
+    // Mesma regra do POST: só obrigatório sobre o estado final quando a conta
+    // tem a classificação de IVA dedutível ativa.
+    const nextVatDeductible =
+      body.vatDeductible !== undefined ? (body.vatDeductible as boolean | null) : existing.vatDeductible;
+    if (nextStatus === 'SUBMETIDA' && req.user!.vatClassificationEnabled && nextVatDeductible == null) {
+      res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
       return;
     }
     const nextSupplierNif = body.supplierNif !== undefined ? (body.supplierNif as string) : existing.supplierNif;
@@ -387,6 +419,7 @@ expensesRouter.patch('/:id', async (req, res) => {
         originalAmountBase: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountBase),
         originalAmountVat: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountVat),
         originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
+        vatDeductible: body.vatDeductible as boolean | null | undefined,
       },
     });
     // Arquiva no Drive qualquer despesa submetida que ainda não tenha ficheiro
@@ -396,6 +429,9 @@ expensesRouter.patch('/:id', async (req, res) => {
     // guardar a despesa outra vez. driveFileId preenchido garante idempotência.
     if (expense.status === 'SUBMETIDA' && !expense.driveFileId) {
       archiveInvoiceToDriveBestEffort(req.user!, expense);
+    }
+    if (expense.status === 'SUBMETIDA') {
+      void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
     }
     scheduleSheetsSyncSoon(req.user!.id);
     res.json(toExpenseJson(expense));

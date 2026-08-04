@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ComponentProps } from 'react';
 import { ActivityIndicator, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useFocusEffect } from 'expo-router';
@@ -7,22 +7,66 @@ import type { AcquirerNifSummary } from '@invoice-scanner/shared';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
 import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
-import { listAcquirerNifSummaries } from '@/api/client';
+import {
+  listAcquirerNifSummaries,
+  listAcquirerNifDisplays,
+  setAcquirerNifDisplay,
+  type AcquirerNifDisplay,
+} from '@/api/client';
 import { formatCurrency, formatNifLabel } from '@/utils/format';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
-import { showAccountMenu } from '@/utils/account-actions';
 import { PendingCountBadge } from '@/components/pending-count-badge';
+import { Card, FieldRow } from '@/components/expense-form';
+import { AccountMenuModal } from '@/components/account-menu-modal';
+import { ACQUIRER_NIF_ICON_CHOICES, DEFAULT_ACQUIRER_NIF_ICON } from '@/constants/acquirer-nif-icons';
+import { useSupplierBackfill } from '@/hooks/use-supplier-backfill';
+import { notify } from '@/utils/alert';
 
 export default function AcquirerNifListScreen() {
   const theme = useTheme();
   const pendingCount = usePendingCount();
   const emailFeatureAvailable = useEmailFeatureAvailable();
   const [summaries, setSummaries] = useState<AcquirerNifSummary[]>([]);
+  const [displays, setDisplays] = useState<Record<string, AcquirerNifDisplay>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [editingNif, setEditingNif] = useState<string | null>(null);
+  const [labelInput, setLabelInput] = useState('');
+  const [iconInput, setIconInput] = useState<string>(DEFAULT_ACQUIRER_NIF_ICON);
+  const [savingLabel, setSavingLabel] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
+  function openLabelEditor(nif: string) {
+    setLabelInput(displays[nif]?.label ?? '');
+    setIconInput(displays[nif]?.icon ?? DEFAULT_ACQUIRER_NIF_ICON);
+    setEditingNif(nif);
+  }
+
+  async function handleSaveLabel() {
+    if (!editingNif) return;
+    setSavingLabel(true);
+    try {
+      const display: AcquirerNifDisplay = {
+        label: labelInput.trim() || undefined,
+        icon: iconInput !== DEFAULT_ACQUIRER_NIF_ICON ? iconInput : undefined,
+      };
+      await setAcquirerNifDisplay(editingNif, display);
+      setDisplays((prev) => {
+        const next = { ...prev };
+        if (display.label || display.icon) next[editingNif] = display;
+        else delete next[editingNif];
+        return next;
+      });
+      setEditingNif(null);
+    } catch (err) {
+      notify('Erro', err instanceof Error ? err.message : 'Falha ao guardar etiqueta do NIF');
+    } finally {
+      setSavingLabel(false);
+    }
+  }
 
   function handleAdd() {
     if (Platform.OS === 'web') {
@@ -59,9 +103,7 @@ export default function AcquirerNifListScreen() {
     router.push({ pathname: '/', params: { camera: '1' } });
   }
 
-  function handleLogout() {
-    showAccountMenu();
-  }
+  useSupplierBackfill();
 
   useFocusEffect(
     useCallback(() => {
@@ -77,6 +119,13 @@ export default function AcquirerNifListScreen() {
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
+        });
+      void listAcquirerNifDisplays()
+        .then((data) => {
+          if (!cancelled) setDisplays(data);
+        })
+        .catch(() => {
+          // Etiquetas/ícones são só uma conveniência — falha silenciosa, a lista de NIFs continua a funcionar.
         });
       return () => {
         cancelled = true;
@@ -100,13 +149,15 @@ export default function AcquirerNifListScreen() {
               <Pressable onPress={handleAdd} hitSlop={8}>
                 <Ionicons name="add-circle" size={28} color={theme.accent} />
               </Pressable>
-              <Pressable onPress={handleLogout} hitSlop={8}>
-                <Ionicons name="log-out-outline" size={24} color={theme.accent} />
+              <Pressable onPress={() => setAccountMenuOpen(true)} hitSlop={8}>
+                <Ionicons name="person-circle-outline" size={26} color={theme.accent} />
               </Pressable>
             </View>
           ),
         }}
       />
+
+      <AccountMenuModal visible={accountMenuOpen} onClose={() => setAccountMenuOpen(false)} theme={theme} />
 
       <Modal visible={addMenuOpen} transparent animationType="fade" onRequestClose={() => setAddMenuOpen(false)}>
         <Pressable style={styles.menuOverlay} onPress={() => setAddMenuOpen(false)}>
@@ -172,27 +223,96 @@ export default function AcquirerNifListScreen() {
             </View>
           ) : null
         }
-        renderItem={({ item }) => (
+        renderItem={({ item }) => {
+          const display = displays[item.acquirerNif];
+          const label = display?.label;
+          return (
+            <Pressable
+              style={[styles.row, { backgroundColor: theme.card }]}
+              onPress={() => router.push(`/expenses/${item.acquirerNif}`)}
+            >
+              <View style={[styles.iconWrap, { backgroundColor: theme.backgroundElement }]}>
+                <Ionicons
+                  name={(display?.icon ?? DEFAULT_ACQUIRER_NIF_ICON) as ComponentProps<typeof Ionicons>['name']}
+                  size={20}
+                  color={theme.textSecondary}
+                />
+              </View>
+              <View style={styles.rowInfo}>
+                <Text style={[styles.rowTitle, { color: theme.text }]} numberOfLines={1}>
+                  {label || formatNifLabel(item.acquirerNif)}
+                </Text>
+                <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]} numberOfLines={1}>
+                  {label ? `${formatNifLabel(item.acquirerNif)} · ` : ''}
+                  {item.documentCount} {item.documentCount === 1 ? 'documento' : 'documentos'}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.editButton}
+                hitSlop={8}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  openLabelEditor(item.acquirerNif);
+                }}
+              >
+                <Ionicons name="pencil-outline" size={16} color={theme.textSecondary} />
+              </Pressable>
+              <View style={styles.rowTrailing}>
+                <Text style={[styles.rowAmount, { color: theme.text }]}>{formatCurrency(item.totalAmount)}</Text>
+                <Ionicons name="chevron-forward" size={16} color={theme.separator} />
+              </View>
+            </Pressable>
+          );
+        }}
+      />
+
+      <Modal visible={editingNif !== null} transparent animationType="fade" onRequestClose={() => setEditingNif(null)}>
+        <Pressable style={styles.menuOverlay} onPress={() => setEditingNif(null)}>
           <Pressable
-            style={[styles.row, { backgroundColor: theme.card }]}
-            onPress={() => router.push(`/expenses/${item.acquirerNif}`)}
+            style={[styles.menuCard, { backgroundColor: theme.groupedBackground }]}
+            onPress={(e) => e.stopPropagation()}
           >
-            <View style={[styles.iconWrap, { backgroundColor: theme.backgroundElement }]}>
-              <Ionicons name="business-outline" size={20} color={theme.textSecondary} />
+            <Text style={[styles.menuTitle, { color: theme.text }]}>Etiqueta do NIF</Text>
+            <Card theme={theme}>
+              <FieldRow
+                theme={theme}
+                label="Nome"
+                value={labelInput}
+                onChangeText={setLabelInput}
+                placeholder={editingNif ? formatNifLabel(editingNif) : ''}
+                last
+              />
+            </Card>
+            <Text style={[styles.iconLabel, { color: theme.textSecondary }]}>Ícone</Text>
+            <View style={styles.iconRow}>
+              {ACQUIRER_NIF_ICON_CHOICES.map((choice) => {
+                const selected = iconInput === choice;
+                return (
+                  <Pressable
+                    key={choice}
+                    style={[styles.iconChip, { backgroundColor: selected ? theme.accent : theme.backgroundElement }]}
+                    onPress={() => setIconInput(choice)}
+                  >
+                    <Ionicons name={choice} size={18} color={selected ? '#fff' : theme.textSecondary} />
+                  </Pressable>
+                );
+              })}
             </View>
-            <View style={styles.rowInfo}>
-              <Text style={[styles.rowTitle, { color: theme.text }]}>{formatNifLabel(item.acquirerNif)}</Text>
-              <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]}>
-                {item.documentCount} {item.documentCount === 1 ? 'documento' : 'documentos'}
-              </Text>
-            </View>
-            <View style={styles.rowTrailing}>
-              <Text style={[styles.rowAmount, { color: theme.text }]}>{formatCurrency(item.totalAmount)}</Text>
-              <Ionicons name="chevron-forward" size={16} color={theme.separator} />
+            <View style={styles.menuActions}>
+              <Pressable style={styles.menuCancel} onPress={() => setEditingNif(null)} disabled={savingLabel}>
+                <Text style={[styles.menuCancelText, { color: theme.accent }]}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.saveButton, { backgroundColor: theme.accent }, savingLabel && { opacity: 0.6 }]}
+                onPress={handleSaveLabel}
+                disabled={savingLabel}
+              >
+                <Text style={styles.saveButtonText}>{savingLabel ? 'A guardar…' : 'Guardar'}</Text>
+              </Pressable>
             </View>
           </Pressable>
-        )}
-      />
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -216,9 +336,16 @@ const styles = StyleSheet.create({
   rowInfo: { flex: 1, gap: 2, justifyContent: 'center' },
   rowTitle: { fontSize: 15.5, fontWeight: '600' },
   rowSubtitle: { fontSize: 13 },
+  editButton: { padding: 6, marginRight: 2 },
   rowTrailing: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   rowAmount: { fontSize: 15, fontWeight: '600' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  iconLabel: { fontSize: 12.5, marginTop: 2 },
+  iconRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  iconChip: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  menuActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  saveButton: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 },
+  saveButtonText: { fontSize: 15.5, fontWeight: '700', color: '#FFFFFF' },
   menuOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

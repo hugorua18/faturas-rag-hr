@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { CURRENCIES, CURRENCY_LABELS, EXPENSE_TYPES, EXPENSE_TYPE_LABELS, type ExpenseType } from '@invoice-scanner/shared';
+import { CURRENCIES, CURRENCY_LABELS, type ExpenseCategory } from '@invoice-scanner/shared';
 
 import type { useTheme } from '@/hooks/use-theme';
-import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { DEFAULT_EXPENSE_TYPE_ICON, EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
 
 export { DateField } from './date-field';
 
@@ -26,6 +26,11 @@ export function FieldRow(props: {
   placeholder?: string;
   keyboardType?: 'default' | 'numeric' | 'decimal-pad';
   last?: boolean;
+  // Consulta em curso a preencher este campo automaticamente (ex: nome do
+  // prestador a partir do NIF) — mostra um indicador junto ao rótulo em vez
+  // de deixar o campo simplesmente vazio e parado, o que parece um bug
+  // quando a consulta demora (ex: servidor gratuito "a acordar").
+  loading?: boolean;
 }) {
   return (
     <View
@@ -34,12 +39,15 @@ export function FieldRow(props: {
         !props.last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: props.theme.separator },
       ]}
     >
-      <Text style={[styles.fieldLabel, { color: props.theme.textSecondary }]}>{props.label}</Text>
+      <View style={styles.fieldLabelRow}>
+        <Text style={[styles.fieldLabel, { color: props.theme.textSecondary }]}>{props.label}</Text>
+        {props.loading ? <ActivityIndicator size="small" color={props.theme.textSecondary} /> : null}
+      </View>
       <TextInput
         value={props.value}
         onChangeText={props.onChangeText}
         keyboardType={props.keyboardType ?? 'default'}
-        placeholder={props.placeholder}
+        placeholder={props.loading ? 'A procurar nome…' : props.placeholder}
         placeholderTextColor={props.theme.textSecondary}
         style={[styles.fieldInput, { color: props.theme.text }]}
       />
@@ -51,25 +59,64 @@ export function CategoryChipPicker({
   theme,
   value,
   onChange,
+  categories,
 }: {
   theme: Theme;
-  value: ExpenseType | null;
-  onChange: (type: ExpenseType) => void;
+  value: string | null;
+  onChange: (key: string) => void;
+  categories: ExpenseCategory[];
 }) {
   return (
     <View style={styles.chipRow}>
-      {EXPENSE_TYPES.map((option) => {
-        const selected = value === option;
+      {categories.map((option) => {
+        const selected = value === option.key;
         return (
           <Pressable
-            key={option}
+            key={option.key}
             style={[styles.chip, { backgroundColor: selected ? theme.accent : theme.backgroundElement }]}
-            onPress={() => onChange(option)}
+            onPress={() => onChange(option.key)}
           >
-            <Ionicons name={EXPENSE_TYPE_ICONS[option]} size={15} color={selected ? '#fff' : theme.textSecondary} />
-            <Text style={[styles.chipText, { color: selected ? '#fff' : theme.text }]}>
-              {EXPENSE_TYPE_LABELS[option]}
-            </Text>
+            <Ionicons
+              name={EXPENSE_TYPE_ICONS[option.key] ?? DEFAULT_EXPENSE_TYPE_ICON}
+              size={15}
+              color={selected ? '#fff' : theme.textSecondary}
+            />
+            <Text style={[styles.chipText, { color: selected ? '#fff' : theme.text }]}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// Sim/Não obrigatório quando AccountVatSettings.vatClassificationEnabled está
+// ativo (ver validation.tsx / expense/[id].tsx) — sem opção "não classificada"
+// à vista porque, uma vez ativa a flag, a app exige sempre uma escolha.
+export function VatDeductibleChipPicker({
+  theme,
+  value,
+  onChange,
+}: {
+  theme: Theme;
+  value: boolean | null;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <View style={styles.chipRow}>
+      {(
+        [
+          { value: true, label: 'Sim' },
+          { value: false, label: 'Não' },
+        ] as const
+      ).map((option) => {
+        const selected = value === option.value;
+        return (
+          <Pressable
+            key={String(option.value)}
+            style={[styles.chip, { backgroundColor: selected ? theme.accent : theme.backgroundElement }]}
+            onPress={() => onChange(option.value)}
+          >
+            <Text style={[styles.chipText, { color: selected ? '#fff' : theme.text }]}>{option.label}</Text>
           </Pressable>
         );
       })}
@@ -148,7 +195,8 @@ const styles = StyleSheet.create({
   sectionHeader: { fontSize: 12, fontWeight: '600', marginTop: 20, marginBottom: 6, marginLeft: 4, letterSpacing: 0.4 },
   card: { borderRadius: 12, overflow: 'hidden' },
   fieldRow: { paddingHorizontal: 14, paddingVertical: 10 },
-  fieldLabel: { fontSize: 12.5, marginBottom: 2 },
+  fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  fieldLabel: { fontSize: 12.5 },
   fieldInput: { fontSize: 16.5, paddingVertical: 2 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {

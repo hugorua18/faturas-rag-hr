@@ -23,6 +23,16 @@ model User {
   expenses              Expense[]
   sessions              Session[]
   monthlyReportStatuses MonthlyReportStatus[]
+  expenseCategories     ExpenseCategory[]
+  acquirerNifDisplays   AcquirerNifDisplay[]
+  supplierVatDefaults   SupplierVatDefault[]
+
+  // Classificação de IVA dedutível por fatura — desativada por omissão (produto
+  // pré-existente nunca pediu isto). Quando ativa, POST/PATCH /expenses passam a
+  // exigir Expense.vatDeductible; vatAutoFillMode escolhe a fonte do
+  // pré-preenchimento (nunca as duas ao mesmo tempo — um único campo nullable).
+  vatClassificationEnabled Boolean @default(false)
+  vatAutoFillMode           String? // "SUPPLIER" | "CATEGORY" | null
 }
 
 // Sessão de app (Google Sign-In do utilizador final) — distinta do fluxo OAuth do
@@ -70,6 +80,13 @@ model Expense {
   originalFilePath String? // caminho relativo em apps/server/uploads (Fase 0); Drive a partir da Fase 1
   driveFileId      String? // Google Drive file id do ficheiro original, preenchido após arquivo bem sucedido
 
+  // null = não classificada (todas as despesas anteriores a esta funcionalidade, e
+  // qualquer uma criada com User.vatClassificationEnabled desligado). Só se torna
+  // obrigatório escolher true/false quando essa flag de conta está ativa — ver
+  // routes/expenses.ts. Nunca é derivado da categoria: cada fatura guarda o seu
+  // próprio valor, congelado no momento da submissão.
+  vatDeductible Boolean?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -102,4 +119,66 @@ model ProcessedEmail {
   id             String   @id @default(uuid())
   gmailMessageId String   @unique
   processedAt    DateTime @default(now())
+}
+
+// Categorias de despesa, personalizáveis por utilizador (cada um tem a sua
+// própria lista, sem afetar os outros). `key` é o identificador estável
+// gravado em Expense.type — nunca muda, mesmo que `label` seja renomeado.
+// Um utilizador novo recebe uma cópia dos EXPENSE_TYPES (@invoice-scanner/shared)
+// como ponto de partida, com o MESMO `key` que o enum fixo antigo usava — por
+// isso despesas já existentes (de antes desta funcionalidade) continuam a
+// bater certo com a categoria seed correspondente, sem precisar de migração
+// de dados (ver services/expense-categories.service.ts).
+// `vatDeductible`: null = não classificada, true = dedutível, false = não
+// dedutível — "opcional" por design, não é preciso classificar todas. Desde a
+// reformulação do IVA dedutível (ver Expense.vatDeductible), este campo deixou
+// de controlar a visibilidade das colunas do relatório e passou a servir só de
+// valor por omissão quando User.vatAutoFillMode = "CATEGORY" — cada fatura
+// continua a guardar a sua própria classificação, sem retroatividade.
+model ExpenseCategory {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  key           String
+  label         String
+  vatDeductible Boolean?
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, key])
+}
+
+// Etiqueta + ícone personalizados por NIF de adquirente (ex: "Pessoal" com um
+// ícone de pessoa, em vez de "NIF 123456789"), por utilizador. Guardado no
+// servidor (não no dispositivo) precisamente para sincronizar entre iOS e Web
+// — a primeira versão disto era só AsyncStorage local, o que não sincronizava.
+model AcquirerNifDisplay {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  acquirerNif String
+  label       String?
+  icon        String? // nome Ionicons
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, acquirerNif])
+}
+
+// Valor de IVA dedutível aprendido por NIF de PRESTADOR (fornecedor) — só é
+// escrito/lido quando User.vatAutoFillMode = "SUPPLIER". Cada submissão com
+// esse modo ativo "ensina" (upsert) o valor aqui, que passa a pré-preencher a
+// próxima fatura do mesmo fornecedor; faturas já submetidas mantêm sempre o
+// valor gravado em Expense.vatDeductible, nunca este.
+model SupplierVatDefault {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  supplierNif   String
+  vatDeductible Boolean
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, supplierNif])
 }

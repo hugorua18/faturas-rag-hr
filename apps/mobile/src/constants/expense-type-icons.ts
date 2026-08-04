@@ -1,10 +1,12 @@
 import type { ComponentProps } from 'react';
 import type { Ionicons } from '@expo/vector-icons';
-import type { ExpenseType } from '@invoice-scanner/shared';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
-export const EXPENSE_TYPE_ICONS: Record<ExpenseType, IoniconName> = {
+// Chaveado pela chave estável da categoria (ExpenseCategory.key / Expense.type).
+// Só cobre as categorias seed antigas — categorias novas criadas pelo
+// utilizador não têm entrada aqui e usam o ícone genérico (ver DEFAULT_EXPENSE_TYPE_ICON).
+export const EXPENSE_TYPE_ICONS: Partial<Record<string, IoniconName>> = {
   REFEICOES: 'restaurant-outline',
   TRANSPORTE_DESLOCACOES: 'bus-outline',
   COMBUSTIVEL: 'flame-outline',
@@ -15,3 +17,5 @@ export const EXPENSE_TYPE_ICONS: Record<ExpenseType, IoniconName> = {
   MANICURE: 'sparkles-outline',
   OUTROS: 'ellipsis-horizontal-outline',
 };
+
+export const DEFAULT_EXPENSE_TYPE_ICON: IoniconName = 'pricetag-outline';

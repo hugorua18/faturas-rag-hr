@@ -16,19 +16,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  amountsAreConsistent,
-  hasAllAmounts,
-  nifsAreDistinct,
-  type Expense,
-  type ExpenseType,
-} from '@invoice-scanner/shared';
+import { amountsAreConsistent, hasAllAmounts, nifsAreDistinct, type Expense } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
+import { useSupplierTypeAutofill } from '@/hooks/use-supplier-type-autofill';
+import { useExpenseCategories } from '@/hooks/use-expense-categories';
+import { useAccountVatSettings } from '@/hooks/use-account-vat-settings';
 import { useImageAspectRatio } from '@/hooks/use-image-aspect-ratio';
 import { webMaxWidthStyle } from '@/constants/theme';
 import { deleteExpense, getExpense, resolveFileUrl, updateExpense } from '@/api/client';
+import { setCachedSupplierType } from '@/state/supplier-cache';
 import {
   Card,
   CategoryChipPicker,
@@ -37,6 +35,7 @@ import {
   FieldRow,
   PhotoLightbox,
   SectionHeader,
+  VatDeductibleChipPicker,
 } from '@/components/expense-form';
 import { confirmAction } from '@/utils/alert';
 import { parseDecimal } from '@/utils/number';
@@ -64,7 +63,10 @@ export default function ExpenseDetailScreen() {
   // existem depois de "expense" carregar) — as Regras dos Hooks exigem que
   // corra em todos os renders, por isso a condição vive dentro do argumento.
   const aspectRatio = useImageAspectRatio(expense?.fileUrl ? resolveFileUrl(expense.fileUrl) : null);
-  const [type, setType] = useState<ExpenseType | null>(null);
+  const [type, setType] = useState<string | null>(null);
+  const { categories } = useExpenseCategories();
+  const { settings: vatSettings } = useAccountVatSettings();
+  const [vatDeductible, setVatDeductible] = useState<boolean | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierNif, setSupplierNif] = useState('');
   const [acquirerNif, setAcquirerNif] = useState('');
@@ -85,7 +87,11 @@ export default function ExpenseDetailScreen() {
   // Sobretudo útil na revisão de faturas chegadas por email (fila "Tratamento
   // manual"), onde o nome vem quase sempre vazio — preenche a partir do NIF
   // (histórico → VIES) sem sobrepor edições do utilizador.
-  useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
+  const supplierNameLoading = useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
+  // Categoria pré-preenchida com a última classificação usada para este
+  // fornecedor — relevante sobretudo em despesas de "Tratamento manual"
+  // (email/OCR), que chegam sem categoria; nunca sobrepõe a já carregada.
+  useSupplierTypeAutofill(supplierNif, type, setType, categories);
 
   const loadExpense = useCallback(() => {
     if (!id) return;
@@ -93,7 +99,8 @@ export default function ExpenseDetailScreen() {
     getExpense(id)
       .then((data) => {
         setExpense(data);
-        setType((data.type as ExpenseType) ?? null);
+        setType(data.type ?? null);
+        setVatDeductible(data.vatDeductible ?? null);
         setSupplierName(data.supplierName ?? '');
         setSupplierNif(data.supplierNif ?? '');
         setAcquirerNif(data.acquirerNif ?? '');
@@ -152,6 +159,11 @@ export default function ExpenseDetailScreen() {
     if (!nifsAreDistinct(data.supplierNif, data.acquirerNif)) {
       return { error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' };
     }
+    // Mesma regra do ecrã de validação: só obrigatório quando a despesa fica
+    // SUBMETIDA e a conta tem a classificação de IVA dedutível ativa.
+    if (requireAllAmounts && vatSettings.vatClassificationEnabled && vatDeductible === null) {
+      return { error: 'Escolhe se a despesa é IVA dedutível.' };
+    }
     return { data };
   }
 
@@ -171,6 +183,7 @@ export default function ExpenseDetailScreen() {
       originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
       originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
       originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
+      vatDeductible: vatSettings.vatClassificationEnabled ? vatDeductible : undefined,
     };
   }
 
@@ -187,6 +200,7 @@ export default function ExpenseDetailScreen() {
     setSaved(false);
     try {
       const updated = await updateExpense(id, result.data);
+      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       setExpense(updated);
       setSaved(true);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -213,6 +227,7 @@ export default function ExpenseDetailScreen() {
     setError(null);
     try {
       await updateExpense(id, { ...result.data, status: 'SUBMETIDA' });
+      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
     } catch (err) {
@@ -338,7 +353,14 @@ export default function ExpenseDetailScreen() {
           <View style={isWideLayout ? styles.formColumn : undefined}>
             <SectionHeader label="Dados da fatura" theme={theme} />
             <Card theme={theme}>
-              <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
+              <FieldRow
+                theme={theme}
+                label="Nome do prestador"
+                value={supplierName}
+                onChangeText={setSupplierName}
+                placeholder="Ex: Restaurante O Manel"
+                loading={supplierNameLoading}
+              />
               <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
               <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
               <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
@@ -405,7 +427,14 @@ export default function ExpenseDetailScreen() {
             )}
 
             <SectionHeader label="Tipo de despesa" theme={theme} />
-            <CategoryChipPicker theme={theme} value={type} onChange={setType} />
+            <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+
+            {vatSettings.vatClassificationEnabled && (
+              <>
+                <SectionHeader label="IVA dedutível" theme={theme} />
+                <VatDeductibleChipPicker theme={theme} value={vatDeductible} onChange={setVatDeductible} />
+              </>
+            )}
 
             {error && (
               <View style={styles.errorRow}>

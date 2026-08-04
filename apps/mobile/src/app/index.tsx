@@ -10,10 +10,12 @@ import { parseInvoiceQr } from '@invoice-scanner/shared';
 import { setPendingCapture } from '@/state/pending-capture';
 import { useTheme } from '@/hooks/use-theme';
 import { usePendingCount } from '@/hooks/use-pending-count';
+import { useOfflineQueueSync } from '@/hooks/use-offline-queue-sync';
 import { useEmailFeatureAvailable } from '@/hooks/use-email-feature';
 import { pickAndImportDocument, pickAndImportFromGallery } from '@/utils/import-document';
-import { showAccountMenu } from '@/utils/account-actions';
 import { PendingCountBadge } from '@/components/pending-count-badge';
+import { AccountMenuModal } from '@/components/account-menu-modal';
+import { useSupplierBackfill } from '@/hooks/use-supplier-backfill';
 
 const FRAME_SIZE = 260;
 const CORNER_LENGTH = 32;
@@ -68,6 +70,7 @@ function CameraScreen() {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
   const pendingCount = usePendingCount();
+  const { count: offlineQueueCount } = useOfflineQueueSync();
   const emailFeatureAvailable = useEmailFeatureAvailable();
   const [permission, requestPermission] = useCameraPermissions();
   // Toque no preview = repasse único de focagem (ver comentário no autofocus).
@@ -79,6 +82,8 @@ function CameraScreen() {
   const [lockedQrPayload, setLockedQrPayload] = useState<string | null>(null);
   const [torchOn, setTorchOn] = useState(false);
   const [layout, setLayout] = useState({ width: 0, height: 0 });
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  useSupplierBackfill();
   const cameraRef = useRef<CameraView>(null);
   const locked = lockedQrPayload !== null;
 
@@ -145,10 +150,6 @@ function CameraScreen() {
       { text: 'Ficheiros', onPress: () => void runImport(pickAndImportDocument) },
       { text: 'Cancelar', style: 'cancel' },
     ]);
-  }
-
-  function handleLogout() {
-    showAccountMenu();
   }
 
   const handleBarcodeScanned = useCallback(
@@ -238,14 +239,22 @@ function CameraScreen() {
               <PendingCountBadge count={pendingCount} />
             </Pressable>
           )}
+          {Platform.OS !== 'web' && (
+            <Pressable style={styles.iconButton} onPress={() => router.push('/offline-queue')}>
+              <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
+              <PendingCountBadge count={offlineQueueCount} />
+            </Pressable>
+          )}
           <Pressable style={styles.iconButton} onPress={() => router.push('/expenses')}>
             <Ionicons name="receipt-outline" size={20} color="#fff" />
           </Pressable>
-          <Pressable style={styles.iconButton} onPress={handleLogout}>
-            <Ionicons name="log-out-outline" size={20} color="#fff" />
+          <Pressable style={styles.iconButton} onPress={() => setAccountMenuOpen(true)}>
+            <Ionicons name="person-circle-outline" size={22} color="#fff" />
           </Pressable>
         </View>
       </View>
+
+      <AccountMenuModal visible={accountMenuOpen} onClose={() => setAccountMenuOpen(false)} theme={theme} />
 
       <View style={styles.frameWrap} pointerEvents="none">
         <View style={styles.frame}>

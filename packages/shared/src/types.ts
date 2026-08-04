@@ -1,5 +1,3 @@
-import type { ExpenseType } from './expense-types';
-
 export type ExpenseStatus = 'TRATAMENTO_MANUAL' | 'SUBMETIDA';
 export type ExpenseSource = 'CAMERA' | 'EMAIL' | 'UPLOAD';
 
@@ -27,7 +25,8 @@ export function isCurrencyCode(value: string): boolean {
 
 /** Payload enviado pelo cliente ao submeter/criar uma despesa, depois de validado pelo utilizador. */
 export interface ExpenseInput {
-  type: ExpenseType;
+  /** Chave estável de uma categoria do utilizador (ExpenseCategory.key) — não é mais um enum fixo. */
+  type: string;
   supplierName?: string;
   supplierNif?: string;
   acquirerNif?: string;
@@ -51,6 +50,9 @@ export interface ExpenseInput {
   originalAmountTotal?: number;
   qrRawPayload?: string;
   source: ExpenseSource;
+  /** null = não classificada. Obrigatório preencher (true/false) quando a conta tem
+   * AccountVatSettings.vatClassificationEnabled ativo — ver validation.tsx / expense/[id].tsx. */
+  vatDeductible?: boolean | null;
 }
 
 export interface Expense extends ExpenseInput {
@@ -113,4 +115,25 @@ export interface MonthlySummary {
 export interface DuplicateExpenseResponse {
   error: string;
   existingId: string;
+}
+
+/**
+ * Fonte usada para pré-preencher o IVA dedutível de uma fatura nova:
+ * "SUPPLIER" = último valor guardado para o NIF do prestador (SupplierVatDefault),
+ * "CATEGORY" = valor guardado na categoria escolhida (ExpenseCategory.vatDeductible),
+ * null = sem pré-preenchimento automático (o utilizador escolhe sempre à mão).
+ * Mutuamente exclusivo por design — um único campo, nunca os dois em simultâneo.
+ */
+export type VatAutoFillMode = 'SUPPLIER' | 'CATEGORY' | null;
+
+/**
+ * Definições de conta para a classificação de IVA dedutível — desativada por
+ * omissão. Quando ativa, o ecrã de cada fatura passa a exigir Sim/Não (ver
+ * ExpenseInput.vatDeductible) e, submissão a submissão, "ensina" o valor por
+ * omissão da fonte escolhida em vatAutoFillMode (ver services/vat-learning
+ * no servidor).
+ */
+export interface AccountVatSettings {
+  vatClassificationEnabled: boolean;
+  vatAutoFillMode: VatAutoFillMode;
 }

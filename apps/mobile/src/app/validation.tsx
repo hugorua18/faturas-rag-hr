@@ -14,19 +14,21 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import {
-  amountsAreConsistent,
-  hasAllAmounts,
-  nifsAreDistinct,
-  type ExpenseType,
-  type ExpenseInput,
-} from '@invoice-scanner/shared';
+import NetInfo from '@react-native-community/netinfo';
+import { amountsAreConsistent, hasAllAmounts, nifsAreDistinct, type ExpenseInput } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { useSupplierNameAutofill } from '@/hooks/use-supplier-name-autofill';
+import { useSupplierTypeAutofill } from '@/hooks/use-supplier-type-autofill';
+import { useExpenseCategories } from '@/hooks/use-expense-categories';
+import { useAccountVatSettings } from '@/hooks/use-account-vat-settings';
+import { useSupplierVatDefaults } from '@/hooks/use-supplier-vat-defaults';
+import { useVatDeductibleAutofill } from '@/hooks/use-vat-deductible-autofill';
 import { useImageAspectRatio } from '@/hooks/use-image-aspect-ratio';
+import { setCachedSupplierType } from '@/state/supplier-cache';
+import { enqueueSubmission } from '@/state/offline-queue';
 import { webMaxWidthStyle } from '@/constants/theme';
-import { createExpense, DuplicateExpenseError, extractDocument, resolveFileUrl } from '@/api/client';
+import { createExpense, DuplicateExpenseError, extractDocument, resolveFileUrl, type CapturedFile } from '@/api/client';
 import { takePendingCapture, type PendingCapture } from '@/state/pending-capture';
 import {
   Card,
@@ -36,8 +38,9 @@ import {
   FieldRow,
   PhotoLightbox,
   SectionHeader,
+  VatDeductibleChipPicker,
 } from '@/components/expense-form';
-import { confirmAction } from '@/utils/alert';
+import { confirmAction, notify } from '@/utils/alert';
 import { parseDecimal } from '@/utils/number';
 import { convertToEur } from '@/utils/currency-conversion';
 
@@ -46,6 +49,26 @@ import { convertToEur } from '@/utils/currency-conversion';
 // (a maioria dos telemóveis em retrato). O valor cobre desktop/tablet e
 // telemóveis em paisagem, sem afetar o uso normal em iPhone.
 const WIDE_LAYOUT_BREAKPOINT = 820;
+
+async function isOffline(): Promise<boolean> {
+  const state = await NetInfo.fetch();
+  return state.isConnected === false || state.isInternetReachable === false;
+}
+
+// Guarda a submissão na fila local (só nativo — a Web não tem armazenamento
+// de ficheiros persistente para reenviar depois) e replica os mesmos efeitos
+// de um envio bem-sucedido, para o utilizador não notar diferença nenhuma no
+// momento em que submete: o reenvio automático fica a cargo de
+// hooks/use-offline-queue-sync.ts assim que a ligação voltar.
+async function queueForLater(file: CapturedFile, input: ExpenseInput): Promise<boolean> {
+  try {
+    await enqueueSubmission(file.uri, file.mimeType, input);
+    return true;
+  } catch (err) {
+    console.error('[validation] falha ao guardar submissão offline', err);
+    return false;
+  }
+}
 
 export default function ValidationScreen() {
   const theme = useTheme();
@@ -58,7 +81,11 @@ export default function ValidationScreen() {
   const aspectRatio = useImageAspectRatio(
     capture && capture.fileMimeType.startsWith('image/') ? capture.fileUri : null,
   );
-  const [type, setType] = useState<ExpenseType | null>(null);
+  const [type, setType] = useState<string | null>(null);
+  const { categories } = useExpenseCategories();
+  const { settings: vatSettings } = useAccountVatSettings();
+  const { defaults: supplierVatDefaults } = useSupplierVatDefaults();
+  const [vatDeductible, setVatDeductible] = useState<boolean | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierNif, setSupplierNif] = useState('');
   const [acquirerNif, setAcquirerNif] = useState('');
@@ -78,7 +105,21 @@ export default function ValidationScreen() {
   // O QR das faturas PT traz o NIF do prestador mas nunca o nome — tenta
   // preenchê-lo automaticamente (histórico → VIES) sem sobrepor o que o
   // utilizador escrever.
-  useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
+  const supplierNameLoading = useSupplierNameAutofill(supplierNif, supplierName, setSupplierName);
+  // Categoria pré-preenchida com a última classificação usada para este
+  // fornecedor — só cache local, ver use-supplier-type-autofill.
+  useSupplierTypeAutofill(supplierNif, type, setType, categories);
+  // IVA dedutível pré-preenchido a partir do fornecedor ou da categoria,
+  // conforme escolhido em /vat-settings — ver use-vat-deductible-autofill.
+  useVatDeductibleAutofill(
+    vatSettings.vatAutoFillMode,
+    supplierNif,
+    type,
+    categories,
+    supplierVatDefaults,
+    vatDeductible,
+    setVatDeductible,
+  );
 
   // Preenche só campos ainda vazios — nunca sobrepõe o que o utilizador já
   // escreveu (o OCR chega segundos depois de o ecrã abrir).
@@ -216,36 +257,65 @@ export default function ValidationScreen() {
       setError('O NIF do prestador e o NIF do utente não podem ser iguais.');
       return;
     }
+    if (vatSettings.vatClassificationEnabled && vatDeductible === null) {
+      hapticError();
+      setError('Escolhe se a despesa é IVA dedutível.');
+      return;
+    }
     if (Platform.OS !== 'web') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    const input: ExpenseInput = {
+      type,
+      source: capture?.source ?? (capture?.existingFilePath ? 'UPLOAD' : 'CAMERA'),
+      supplierName: supplierName || undefined,
+      supplierNif: supplierNif || undefined,
+      acquirerNif: acquirerNif || undefined,
+      documentType: capture?.parsedQr?.documentType || undefined,
+      documentId: documentId || undefined,
+      documentDate: documentDate || undefined,
+      documentTime: documentTime || undefined,
+      currency,
+      amountBase: effectiveBase,
+      amountVat: effectiveVat,
+      amountTotal: effectiveTotal,
+      originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
+      originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
+      originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
+      qrRawPayload: capture?.qrRawPayload,
+      vatDeductible: vatSettings.vatClassificationEnabled ? vatDeductible : null,
+    };
+    // Upload manual já processado por /expenses/extract: o ficheiro já está
+    // gravado no servidor, não é preciso reenviar os bytes. "file" também é o
+    // que a fila offline copia — sem ele (existingFilePath), já houve rede há
+    // segundos e não há nada local para guardar, por isso segue-se sempre o
+    // caminho normal (pedido ao servidor).
+    const file =
+      capture && !capture.existingFilePath
+        ? { uri: capture.fileUri, name: `fatura.${capture.fileMimeType.split('/')[1] ?? 'jpg'}`, mimeType: capture.fileMimeType }
+        : undefined;
+
+    async function fallBackToOfflineQueue(): Promise<boolean> {
+      if (Platform.OS === 'web' || !file || !(await isOffline())) return false;
+      if (!(await queueForLater(file, input))) return false;
+      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      notify(
+        'Guardada para envio automático',
+        'Sem ligação à internet — a fatura fica guardada no telemóvel e é submetida automaticamente assim que a ligação voltar.',
+      );
+      router.replace('/expenses');
+      return true;
+    }
+
     setSubmitting(true);
     setError(null);
     try {
-      const input: ExpenseInput = {
-        type,
-        source: capture?.source ?? (capture?.existingFilePath ? 'UPLOAD' : 'CAMERA'),
-        supplierName: supplierName || undefined,
-        supplierNif: supplierNif || undefined,
-        acquirerNif: acquirerNif || undefined,
-        documentType: capture?.parsedQr?.documentType || undefined,
-        documentId: documentId || undefined,
-        documentDate: documentDate || undefined,
-        documentTime: documentTime || undefined,
-        currency,
-        amountBase: effectiveBase,
-        amountVat: effectiveVat,
-        amountTotal: effectiveTotal,
-        originalAmountBase: conversion ? parseDecimal(amountBase) : undefined,
-        originalAmountVat: conversion ? parseDecimal(amountVat) : undefined,
-        originalAmountTotal: conversion ? parseDecimal(amountTotal) : undefined,
-        qrRawPayload: capture?.qrRawPayload,
-      };
-      // Upload manual já processado por /expenses/extract: o ficheiro já está
-      // gravado no servidor, não é preciso reenviar os bytes.
-      const file =
-        capture && !capture.existingFilePath
-          ? { uri: capture.fileUri, name: `fatura.${capture.fileMimeType.split('/')[1] ?? 'jpg'}`, mimeType: capture.fileMimeType }
-          : undefined;
+      // Sem ligação, nem vale a pena esperar pelo timeout de 60s do pedido —
+      // guarda já na fila local em vez de tentar o servidor primeiro.
+      if (await fallBackToOfflineQueue()) return;
+
       await createExpense(input, file, replaceExpenseId, capture?.existingFilePath);
+      if (supplierNif.trim() && type) void setCachedSupplierType(supplierNif.trim(), type);
       if (Platform.OS !== 'web') void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace('/expenses');
     } catch (err) {
@@ -260,6 +330,9 @@ export default function ValidationScreen() {
         );
         return;
       }
+      // O pedido falhou a meio por causa da rede (ex: sinal a piorar depois do
+      // teste inicial) — antes de mostrar um erro, tenta a mesma fila local.
+      if (await fallBackToOfflineQueue()) return;
       hapticError();
       setError(err instanceof Error ? err.message : 'Falha ao submeter a despesa.');
     } finally {
@@ -372,7 +445,14 @@ export default function ValidationScreen() {
           <View style={isWideLayout ? styles.formColumn : undefined}>
             <SectionHeader label="Dados da fatura" theme={theme} />
             <Card theme={theme}>
-              <FieldRow theme={theme} label="Nome do prestador" value={supplierName} onChangeText={setSupplierName} placeholder="Ex: Restaurante O Manel" />
+              <FieldRow
+                theme={theme}
+                label="Nome do prestador"
+                value={supplierName}
+                onChangeText={setSupplierName}
+                placeholder="Ex: Restaurante O Manel"
+                loading={supplierNameLoading}
+              />
               <FieldRow theme={theme} label="NIF do prestador" value={supplierNif} onChangeText={setSupplierNif} keyboardType="numeric" placeholder="123456789" />
               <FieldRow theme={theme} label="NIF do utente" value={acquirerNif} onChangeText={setAcquirerNif} keyboardType="numeric" placeholder="999999990" />
               <FieldRow theme={theme} label="Número do documento" value={documentId} onChangeText={setDocumentId} placeholder="Ex: FT SERIEA/123" />
@@ -439,7 +519,14 @@ export default function ValidationScreen() {
             )}
 
             <SectionHeader label="Tipo de despesa" theme={theme} />
-            <CategoryChipPicker theme={theme} value={type} onChange={setType} />
+            <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+
+            {vatSettings.vatClassificationEnabled && (
+              <>
+                <SectionHeader label="IVA dedutível" theme={theme} />
+                <VatDeductibleChipPicker theme={theme} value={vatDeductible} onChange={setVatDeductible} />
+              </>
+            )}
 
             {error && (
               <View style={styles.errorRow}>

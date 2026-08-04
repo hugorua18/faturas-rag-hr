@@ -48,8 +48,11 @@ const SECTIONS: Array<{ title: string; body: string }> = [
     title: 'Os seus direitos',
     body:
       'Pode eliminar qualquer despesa na aplicação (o registo é removido da base de dados) e revogar o acesso ' +
-      'da aplicação à sua conta Google em myaccount.google.com/connections a qualquer momento. Para eliminação ' +
-      'completa da conta e dos dados, contacte hugo.rua@gmail.com.',
+      'da aplicação à sua conta Google em myaccount.google.com/connections a qualquer momento. Pode também ' +
+      'eliminar a sua conta e todos os dados associados diretamente na aplicação: toque no ícone de sessão ' +
+      'no ecrã da câmara ou das despesas e escolha "Eliminar conta". A eliminação é imediata e definitiva ' +
+      '(despesas, sessões e a conta são removidas da base de dados). Para qualquer dúvida, contacte ' +
+      'hugo.rua@gmail.com.',
   },
 ];
 

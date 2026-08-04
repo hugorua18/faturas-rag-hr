@@ -7,14 +7,15 @@ import {
   EXPENSE_TYPE_LABELS,
   REPORT_STATUS_COLORS,
   REPORT_STATUS_LABELS,
+  isExpenseType,
   type Expense,
-  type ExpenseType,
   type ReportStatus,
 } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
 import { deleteExpense, listExpenses, listMonthlySummaries, resolveFileUrl, updateReportStatus } from '@/api/client';
-import { EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { DEFAULT_EXPENSE_TYPE_ICON, EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { useExpenseCategories } from '@/hooks/use-expense-categories';
 import { formatCurrency, formatPeriodLabel } from '@/utils/format';
 import { confirmAction, notify } from '@/utils/alert';
 
@@ -26,6 +27,7 @@ const NEXT_STATUS: Record<ReportStatus, ReportStatus> = {
 export default function MonthlyExpenseListScreen() {
   const theme = useTheme();
   const { nif, period } = useLocalSearchParams<{ nif: string; period: string }>();
+  const { categories } = useExpenseCategories();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [status, setStatus] = useState<ReportStatus>('ABERTO');
   const [loading, setLoading] = useState(true);
@@ -144,7 +146,9 @@ export default function MonthlyExpenseListScreen() {
           ) : null
         }
         renderItem={({ item }) => {
-          const type = item.type as ExpenseType;
+          const type = item.type;
+          const categoryLabel =
+            categories.find((c) => c.key === type)?.label ?? (isExpenseType(type) ? EXPENSE_TYPE_LABELS[type] : type);
           return (
             <Swipeable
               ref={(ref) => {
@@ -168,7 +172,7 @@ export default function MonthlyExpenseListScreen() {
                   <Image source={{ uri: resolveFileUrl(item.fileUrl) }} style={styles.thumb} />
                 ) : (
                   <View style={[styles.thumb, styles.thumbPlaceholder, { backgroundColor: theme.backgroundElement }]}>
-                    <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? 'document-outline'} size={20} color={theme.textSecondary} />
+                    <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? DEFAULT_EXPENSE_TYPE_ICON} size={20} color={theme.textSecondary} />
                   </View>
                 )}
                 <View style={styles.rowInfo}>
@@ -176,7 +180,7 @@ export default function MonthlyExpenseListScreen() {
                     {item.supplierName || 'Fornecedor não indicado'}
                   </Text>
                   <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]}>
-                    {EXPENSE_TYPE_LABELS[type] ?? item.type} · {item.documentDate || 'sem data'}
+                    {categoryLabel} · {item.documentDate || 'sem data'}
                   </Text>
                 </View>
                 <View style={styles.rowTrailing}>

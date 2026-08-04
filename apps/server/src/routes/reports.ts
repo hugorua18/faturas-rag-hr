@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { NO_DATE_KEY, NO_NIF_KEY, type ExpenseType } from '@invoice-scanner/shared';
+import { NO_DATE_KEY, NO_NIF_KEY } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { buildMonthlyReportPdf, type ExpenseForReport } from '../services/report-pdf.service';
 import { buildMonthlyReportExcel } from '../services/report-excel.service';
 import { uploadReportToDrive } from '../services/drive.service';
+import { ensureUserCategories } from '../services/expense-categories.service';
 
 export const reportsRouter = Router();
 
@@ -44,7 +45,7 @@ async function loadMonthlyReportData(userId: string, nifParam: string, periodPar
     where: { userId_acquirerNif_period: { userId, acquirerNif: nifParam, period: periodParam } },
   });
   return {
-    expenses: expenses.map((e) => ({ ...e, type: e.type as ExpenseType })) satisfies ExpenseForReport[],
+    expenses: expenses satisfies ExpenseForReport[],
     status: (statusRecord?.status as 'ABERTO' | 'ENVIADO_CONTABILISTA') ?? 'ABERTO',
   };
 }
@@ -64,15 +65,26 @@ async function loadRangeReportData(userId: string, nifParam: string, fromPeriod:
     },
     orderBy: { documentDate: 'desc' },
   });
-  return { expenses: expenses.map((e) => ({ ...e, type: e.type as ExpenseType })) satisfies ExpenseForReport[] };
+  return { expenses: expenses satisfies ExpenseForReport[] };
 }
 
 reportsRouter.get('/:nif/:period/pdf', async (req, res) => {
   const { nif, period } = req.params;
   const label = typeof req.query.label === 'string' ? req.query.label : period;
   try {
-    const { expenses, status } = await loadMonthlyReportData(req.user!.id, nif, period);
-    const buffer = await buildMonthlyReportPdf(nif, label, status, expenses, req.user ?? null);
+    const [{ expenses, status }, categories] = await Promise.all([
+      loadMonthlyReportData(req.user!.id, nif, period),
+      ensureUserCategories(req.user!.id),
+    ]);
+    const buffer = await buildMonthlyReportPdf(
+      nif,
+      label,
+      status,
+      expenses,
+      req.user ?? null,
+      categories,
+      req.user!.vatClassificationEnabled,
+    );
     await archiveReportToDriveBestEffort(req.user, nif, period, buffer, 'application/pdf', 'pdf');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${nif}-${period}.pdf"`);
@@ -87,8 +99,11 @@ reportsRouter.get('/:nif/:period/xlsx', async (req, res) => {
   const { nif, period } = req.params;
   const label = typeof req.query.label === 'string' ? req.query.label : period;
   try {
-    const { expenses, status } = await loadMonthlyReportData(req.user!.id, nif, period);
-    const buffer = await buildMonthlyReportExcel(nif, label, status, expenses);
+    const [{ expenses, status }, categories] = await Promise.all([
+      loadMonthlyReportData(req.user!.id, nif, period),
+      ensureUserCategories(req.user!.id),
+    ]);
+    const buffer = await buildMonthlyReportExcel(nif, label, status, expenses, categories, req.user!.vatClassificationEnabled);
     await archiveReportToDriveBestEffort(
       req.user,
       nif,
@@ -116,8 +131,19 @@ reportsRouter.get('/:nif/pdf', async (req, res) => {
     return;
   }
   try {
-    const { expenses } = await loadRangeReportData(req.user!.id, nif, from, to);
-    const buffer = await buildMonthlyReportPdf(nif, label || `${from} a ${to}`, null, expenses, req.user ?? null);
+    const [{ expenses }, categories] = await Promise.all([
+      loadRangeReportData(req.user!.id, nif, from, to),
+      ensureUserCategories(req.user!.id),
+    ]);
+    const buffer = await buildMonthlyReportPdf(
+      nif,
+      label || `${from} a ${to}`,
+      null,
+      expenses,
+      req.user ?? null,
+      categories,
+      req.user!.vatClassificationEnabled,
+    );
     // Usa o intervalo em bruto (não o "label" livre) como período no caminho do
     // Drive — o label pode ter espaços/acentos, inseguros num nome de ficheiro.
     await archiveReportToDriveBestEffort(req.user, nif, `${from}-a-${to}`, buffer, 'application/pdf', 'pdf');
@@ -138,8 +164,18 @@ reportsRouter.get('/:nif/xlsx', async (req, res) => {
     return;
   }
   try {
-    const { expenses } = await loadRangeReportData(req.user!.id, nif, from, to);
-    const buffer = await buildMonthlyReportExcel(nif, label || `${from} a ${to}`, null, expenses);
+    const [{ expenses }, categories] = await Promise.all([
+      loadRangeReportData(req.user!.id, nif, from, to),
+      ensureUserCategories(req.user!.id),
+    ]);
+    const buffer = await buildMonthlyReportExcel(
+      nif,
+      label || `${from} a ${to}`,
+      null,
+      expenses,
+      categories,
+      req.user!.vatClassificationEnabled,
+    );
     await archiveReportToDriveBestEffort(
       req.user,
       nif,
