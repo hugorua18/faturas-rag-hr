@@ -22,6 +22,9 @@ import { archiveInvoiceToDriveBestEffort } from '../services/drive.service';
 import { scheduleSheetsSyncSoon } from '../services/sheets-export.service';
 import { triggerPoll } from '../services/gmail-poller.service';
 import { uploadsDir, resolveSafeUploadPath, signUploadPath, signExpenseFileUrl } from '../utils/uploads-path';
+import { asyncHandler } from '../utils/async-handler';
+import { detectRealFileType } from '../utils/file-signature';
+import { heavyRouteRateLimit } from '../middleware/rate-limit';
 
 fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -96,65 +99,86 @@ function deleteUploadedFile(originalFilePath: string | null | undefined): void {
   });
 }
 
-expensesRouter.get('/', async (req, res) => {
-  const { acquirerNif, period, from, to, status } = req.query as {
-    acquirerNif?: string;
-    period?: string;
-    from?: string;
-    to?: string;
-    status?: string;
-  };
-  const where: Record<string, unknown> = {
-    userId: req.user!.id,
-    status: status && isExpenseStatus(status) ? status : 'SUBMETIDA',
-  };
-  if (acquirerNif) where.acquirerNif = nifFilterValue(acquirerNif);
-  // "from"/"to" (datas ISO YYYY-MM-DD) cobrem um intervalo livre, possivelmente
-  // vários meses — usado pela busca de faturas no ecrã de meses. Têm
-  // prioridade sobre "period" (um único mês) quando ambos vêm no pedido, mas
-  // o cliente nunca envia os dois ao mesmo tempo.
-  if (from && to) {
-    where.documentDate = { gte: from, lte: to };
-  } else if (period === NO_DATE_KEY) {
-    where.documentDate = null;
-  } else if (period) {
-    where.documentDate = { startsWith: period };
-  }
-  const expenses = await prisma.expense.findMany({ where, orderBy: { documentDate: 'desc' } });
-  res.json(expenses.map(toExpenseJson));
-});
+expensesRouter.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const { acquirerNif, period, from, to, status } = req.query as {
+      acquirerNif?: string;
+      period?: string;
+      from?: string;
+      to?: string;
+      status?: string;
+    };
+    const where: Record<string, unknown> = {
+      userId: req.user!.id,
+      status: status && isExpenseStatus(status) ? status : 'SUBMETIDA',
+    };
+    if (acquirerNif) where.acquirerNif = nifFilterValue(acquirerNif);
+    // "from"/"to" (datas ISO YYYY-MM-DD) cobrem um intervalo livre, possivelmente
+    // vários meses — usado pela busca de faturas no ecrã de meses. Têm
+    // prioridade sobre "period" (um único mês) quando ambos vêm no pedido, mas
+    // o cliente nunca envia os dois ao mesmo tempo.
+    if (from && to) {
+      where.documentDate = { gte: from, lte: to };
+    } else if (period === NO_DATE_KEY) {
+      where.documentDate = null;
+    } else if (period) {
+      where.documentDate = { startsWith: period };
+    }
+    const expenses = await prisma.expense.findMany({ where, orderBy: { documentDate: 'desc' } });
+    res.json(expenses.map(toExpenseJson));
+  }),
+);
 
 // Extrai o QR (e guarda uma imagem apresentável) de um PDF/imagem escolhido pelo
 // utilizador — não cria despesa, só prepara os dados para o ecrã de validação
 // (o mesmo papel que a câmara tem antes de ir para /validation).
-expensesRouter.post('/extract', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: 'Nenhum ficheiro enviado' });
-    return;
-  }
-  try {
-    const fileBuffer = fs.readFileSync(req.file.path);
-    const { parsedQr, qrText, ocrFields, imageBuffer, imageMimeType } = await ingestDocument(fileBuffer, req.file.mimetype);
-    deleteUploadedFile(`uploads/${req.file.filename}`);
+expensesRouter.post(
+  '/extract',
+  heavyRouteRateLimit,
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'Nenhum ficheiro enviado' });
+      return;
+    }
+    try {
+      const fileBuffer = fs.readFileSync(req.file.path);
+      // O fileFilter do multer só vê o Content-Type DECLARADO (falsificável)
+      // — confirma aqui os bytes reais antes de gastar tempo a decodificar.
+      if (!detectRealFileType(fileBuffer)) {
+        deleteUploadedFile(`uploads/${req.file.filename}`);
+        res.status(400).json({ error: 'Tipo de ficheiro não suportado — só são aceites imagens ou PDF' });
+        return;
+      }
+      const { parsedQr, qrText, ocrFields, imageBuffer, imageMimeType } = await ingestDocument(
+        fileBuffer,
+        req.file.mimetype,
+      );
+      deleteUploadedFile(`uploads/${req.file.filename}`);
 
-    const ext = imageMimeType === 'image/png' ? '.png' : '.jpg';
-    const filename = `${crypto.randomUUID()}${ext}`;
-    fs.writeFileSync(path.join(uploadsDir, filename), imageBuffer);
+      const ext = imageMimeType === 'image/png' ? '.png' : '.jpg';
+      const filename = `${crypto.randomUUID()}${ext}`;
+      fs.writeFileSync(path.join(uploadsDir, filename), imageBuffer);
 
-    const extractedFilePath = `uploads/${filename}`;
-    res.json({
-      parsedQr,
-      qrRawPayload: qrText,
-      ocrFields,
-      originalFilePath: extractedFilePath,
-      fileUrl: signUploadPath(extractedFilePath),
-      fileMimeType: imageMimeType,
-    });
-  } catch (err) {
-    deleteUploadedFile(`uploads/${req.file.filename}`);
-    res.status(400).json({ error: err instanceof Error ? err.message : 'Falha ao processar o ficheiro' });
-  }
-});
+      const extractedFilePath = `uploads/${filename}`;
+      res.json({
+        parsedQr,
+        qrRawPayload: qrText,
+        ocrFields,
+        originalFilePath: extractedFilePath,
+        fileUrl: signUploadPath(extractedFilePath),
+        fileMimeType: imageMimeType,
+      });
+    } catch (err) {
+      deleteUploadedFile(`uploads/${req.file.filename}`);
+      // Mensagem genérica: o erro real (ex: caminho absoluto no disco do
+      // Render) fica só no log do servidor, nunca na resposta ao cliente.
+      console.error('[expenses] falha ao processar ficheiro em /extract', err);
+      res.status(400).json({ error: 'Falha ao processar o ficheiro' });
+    }
+  }),
+);
 
 // Agregação por NIF adquirente — base do ecrã de relatórios (NIF -> meses -> despesas).
 // Registado antes de "/:id" para o Express não interpretar "summary" como um id.
@@ -162,308 +186,346 @@ expensesRouter.post('/extract', upload.single('file'), async (req, res) => {
 // o mesmo poll do intervalo de 5 min, mas já — para o utilizador não esperar
 // pelo próximo tick para ver faturas acabadas de chegar. Partilha o lock
 // anti-concorrência do poller (triggerPoll).
-expensesRouter.post('/sync-email', async (_req, res) => {
-  try {
-    await triggerPoll();
-    res.status(204).send();
-  } catch (err) {
-    console.error('[gmail-poller] falha na sincronização a pedido', err);
-    res.status(502).json({ error: 'Falha ao sincronizar o email' });
-  }
-});
+expensesRouter.post(
+  '/sync-email',
+  asyncHandler(async (_req, res) => {
+    try {
+      await triggerPoll();
+      res.status(204).send();
+    } catch (err) {
+      console.error('[gmail-poller] falha na sincronização a pedido', err);
+      res.status(502).json({ error: 'Falha ao sincronizar o email' });
+    }
+  }),
+);
 
-expensesRouter.get('/summary/nifs', async (req, res) => {
-  const expenses = await prisma.expense.findMany({ where: { userId: req.user!.id, status: 'SUBMETIDA' } });
-  const groups = new Map<string, { documentCount: number; totalAmount: number }>();
-  for (const expense of expenses) {
-    const key = expense.acquirerNif || NO_NIF_KEY;
-    const entry = groups.get(key) ?? { documentCount: 0, totalAmount: 0 };
-    entry.documentCount += 1;
-    entry.totalAmount += expense.amountTotal ?? 0;
-    groups.set(key, entry);
-  }
-  const result = Array.from(groups.entries())
-    .map(([acquirerNif, stats]) => ({ acquirerNif, ...stats }))
-    .sort((a, b) => b.totalAmount - a.totalAmount);
-  res.json(result);
-});
+expensesRouter.get(
+  '/summary/nifs',
+  asyncHandler(async (req, res) => {
+    const expenses = await prisma.expense.findMany({ where: { userId: req.user!.id, status: 'SUBMETIDA' } });
+    const groups = new Map<string, { documentCount: number; totalAmount: number }>();
+    for (const expense of expenses) {
+      const key = expense.acquirerNif || NO_NIF_KEY;
+      const entry = groups.get(key) ?? { documentCount: 0, totalAmount: 0 };
+      entry.documentCount += 1;
+      entry.totalAmount += expense.amountTotal ?? 0;
+      groups.set(key, entry);
+    }
+    const result = Array.from(groups.entries())
+      .map(([acquirerNif, stats]) => ({ acquirerNif, ...stats }))
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+    res.json(result);
+  }),
+);
 
-expensesRouter.get('/summary/nifs/:nif/months', async (req, res) => {
-  const expenses = await prisma.expense.findMany({
-    where: { userId: req.user!.id, status: 'SUBMETIDA', acquirerNif: nifFilterValue(req.params.nif) },
-  });
-  const groups = new Map<string, { documentCount: number; totalAmount: number }>();
-  for (const expense of expenses) {
-    const key = expense.documentDate ? expense.documentDate.slice(0, 7) : NO_DATE_KEY;
-    const entry = groups.get(key) ?? { documentCount: 0, totalAmount: 0 };
-    entry.documentCount += 1;
-    entry.totalAmount += expense.amountTotal ?? 0;
-    groups.set(key, entry);
-  }
-  const statuses = await prisma.monthlyReportStatus.findMany({
-    where: { userId: req.user!.id, acquirerNif: req.params.nif },
-  });
-  const statusByPeriod = new Map(statuses.map((s) => [s.period, s.status]));
-  const result = Array.from(groups.entries())
-    .map(([period, stats]) => ({ period, ...stats, status: statusByPeriod.get(period) ?? 'ABERTO' }))
-    .sort((a, b) => b.period.localeCompare(a.period));
-  res.json(result);
-});
+expensesRouter.get(
+  '/summary/nifs/:nif/months',
+  asyncHandler(async (req, res) => {
+    const expenses = await prisma.expense.findMany({
+      where: { userId: req.user!.id, status: 'SUBMETIDA', acquirerNif: nifFilterValue(req.params.nif) },
+    });
+    const groups = new Map<string, { documentCount: number; totalAmount: number }>();
+    for (const expense of expenses) {
+      const key = expense.documentDate ? expense.documentDate.slice(0, 7) : NO_DATE_KEY;
+      const entry = groups.get(key) ?? { documentCount: 0, totalAmount: 0 };
+      entry.documentCount += 1;
+      entry.totalAmount += expense.amountTotal ?? 0;
+      groups.set(key, entry);
+    }
+    const statuses = await prisma.monthlyReportStatus.findMany({
+      where: { userId: req.user!.id, acquirerNif: req.params.nif },
+    });
+    const statusByPeriod = new Map(statuses.map((s) => [s.period, s.status]));
+    const result = Array.from(groups.entries())
+      .map(([period, stats]) => ({ period, ...stats, status: statusByPeriod.get(period) ?? 'ABERTO' }))
+      .sort((a, b) => b.period.localeCompare(a.period));
+    res.json(result);
+  }),
+);
 
 // Ler/atualizar o estado (Aberto | Enviado para contabilista) de um mês de um NIF adquirente.
 // acquirerNif/period guardam o valor literal do URL (incluindo sentinelas NO_NIF_KEY/NO_DATE_KEY),
 // para corresponder exatamente às chaves usadas na agregação acima.
-expensesRouter.put('/summary/nifs/:nif/months/:period/status', async (req, res) => {
-  const { status } = req.body as { status?: string };
-  if (!status || !isReportStatus(status)) {
-    res.status(400).json({ error: 'Estado inválido' });
-    return;
-  }
-  const record = await prisma.monthlyReportStatus.upsert({
-    where: {
-      userId_acquirerNif_period: { userId: req.user!.id, acquirerNif: req.params.nif, period: req.params.period },
-    },
-    create: { userId: req.user!.id, acquirerNif: req.params.nif, period: req.params.period, status },
-    update: { status },
-  });
-  res.json({ period: record.period, status: record.status });
-});
-
-expensesRouter.get('/:id', async (req, res) => {
-  const expense = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
-  if (!expense) {
-    res.status(404).json({ error: 'Despesa não encontrada' });
-    return;
-  }
-  res.json(toExpenseJson(expense));
-});
-
-expensesRouter.post('/', upload.single('file'), async (req, res) => {
-  const body = req.body as Record<string, string>;
-
-  if (!body.type || !(await isValidCategoryKey(req.user!.id, body.type))) {
-    res.status(400).json({ error: 'Tipo de despesa inválido' });
-    return;
-  }
-  const source = body.source ?? 'CAMERA';
-  if (!VALID_SOURCES.includes(source)) {
-    res.status(400).json({ error: 'Origem inválida' });
-    return;
-  }
-  if (body.currency && !isCurrencyCode(body.currency)) {
-    res.status(400).json({ error: 'Moeda inválida' });
-    return;
-  }
-  // existingFilePath vem do cliente (referência a um ficheiro já gravado por
-  // /expenses/extract) — tem de corresponder exatamente ao formato gerado pelo
-  // servidor, senão um valor como "../../../.env" permitiria ler/apagar
-  // ficheiros arbitrários mais abaixo (deleteUploadedFile/arquivo no Drive).
-  if (!req.file && body.existingFilePath && !resolveSafeUploadPath(body.existingFilePath)) {
-    res.status(400).json({ error: 'Caminho de ficheiro inválido' });
-    return;
-  }
-
-  // Coerência fiscal (POST cria sempre despesas SUBMETIDAS): os três valores
-  // são obrigatórios, base + IVA tem de bater com o total (tolerância de
-  // 1 cêntimo para arredondamentos multi-taxa), e o NIF do prestador nunca
-  // pode ser o mesmo que o do utente.
-  const postBase = toOptionalFloat(body.amountBase);
-  const postVat = toOptionalFloat(body.amountVat);
-  const postTotal = toOptionalFloat(body.amountTotal);
-  if (!hasAllAmounts(postBase, postVat, postTotal)) {
-    res.status(400).json({ error: 'Preenche os três valores: base, IVA e total.' });
-    return;
-  }
-  if (!amountsAreConsistent(postBase, postVat, postTotal)) {
-    res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
-    return;
-  }
-  if (!nifsAreDistinct(body.supplierNif, body.acquirerNif)) {
-    res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
-    return;
-  }
-
-  // Classificação de IVA dedutível: só obrigatória quando a conta a tem ativa
-  // (User.vatClassificationEnabled) — para quem nunca a liga, o fluxo é
-  // exatamente o de sempre.
-  const postVatDeductible = toOptionalBoolean(body.vatDeductible);
-  if (req.user!.vatClassificationEnabled && postVatDeductible === undefined) {
-    res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
-    return;
-  }
-
-  // Deteção de duplicados: mesmo fornecedor (NIF) + mesmo nº de documento já
-  // submetido antes. Só é possível verificar quando ambos os campos estão
-  // preenchidos (ex: faturas sem QR, inseridas à mão, podem não ter nº de
-  // documento). O cliente confirma explicitamente a substituição enviando
-  // "replaceExpenseId" — só nesse caso o registo antigo é apagado.
-  const replaceExpenseId = body.replaceExpenseId || undefined;
-  if (body.supplierNif && body.documentId && !replaceExpenseId) {
-    const duplicate = await prisma.expense.findFirst({
-      where: { userId: req.user!.id, status: 'SUBMETIDA', supplierNif: body.supplierNif, documentId: body.documentId },
-    });
-    if (duplicate) {
-      res.status(409).json({
-        error: 'Já existe uma despesa deste fornecedor com o mesmo número de documento.',
-        existingId: duplicate.id,
-      });
+expensesRouter.put(
+  '/summary/nifs/:nif/months/:period/status',
+  asyncHandler(async (req, res) => {
+    const { status } = req.body as { status?: string };
+    if (!status || !isReportStatus(status)) {
+      res.status(400).json({ error: 'Estado inválido' });
       return;
     }
-  }
+    const record = await prisma.monthlyReportStatus.upsert({
+      where: {
+        userId_acquirerNif_period: { userId: req.user!.id, acquirerNif: req.params.nif, period: req.params.period },
+      },
+      create: { userId: req.user!.id, acquirerNif: req.params.nif, period: req.params.period, status },
+      update: { status },
+    });
+    res.json({ period: record.period, status: record.status });
+  }),
+);
 
-  if (replaceExpenseId) {
-    const existing = await prisma.expense.findFirst({ where: { id: replaceExpenseId, userId: req.user!.id } });
-    if (existing) {
-      deleteUploadedFile(existing.originalFilePath);
-      await prisma.expense.delete({ where: { id: replaceExpenseId } });
-    }
-  }
-
-  const expense = await prisma.expense.create({
-    data: {
-      userId: req.user!.id,
-      status: 'SUBMETIDA',
-      source,
-      type: body.type,
-      supplierName: body.supplierName || undefined,
-      supplierNif: body.supplierNif || undefined,
-      acquirerNif: body.acquirerNif || undefined,
-      documentType: body.documentType || undefined,
-      documentId: body.documentId || undefined,
-      documentDate: body.documentDate || undefined,
-      documentTime: body.documentTime || undefined,
-      amountBase: toOptionalFloat(body.amountBase),
-      amountVat: toOptionalFloat(body.amountVat),
-      amountTotal: toOptionalFloat(body.amountTotal),
-      currency: body.currency || 'EUR',
-      originalAmountBase: toOptionalFloat(body.originalAmountBase),
-      originalAmountVat: toOptionalFloat(body.originalAmountVat),
-      originalAmountTotal: toOptionalFloat(body.originalAmountTotal),
-      qrRawPayload: body.qrRawPayload || undefined,
-      // Upload manual/email já processado por /expenses/extract ou pelo poller do
-      // Gmail — o ficheiro já está em uploads/, não é preciso reenviar os bytes.
-      originalFilePath: req.file ? `uploads/${req.file.filename}` : body.existingFilePath || undefined,
-      vatDeductible: postVatDeductible ?? null,
-    },
-  });
-
-  archiveInvoiceToDriveBestEffort(req.user!, expense);
-  scheduleSheetsSyncSoon(req.user!.id);
-  void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
-
-  res.status(201).json(toExpenseJson(expense));
-});
-
-expensesRouter.patch('/:id', async (req, res) => {
-  const body = req.body as Record<string, unknown>;
-  if (body.type !== undefined && !(await isValidCategoryKey(req.user!.id, String(body.type)))) {
-    res.status(400).json({ error: 'Tipo de despesa inválido' });
-    return;
-  }
-  if (body.status !== undefined && !isExpenseStatus(String(body.status))) {
-    res.status(400).json({ error: 'Estado inválido' });
-    return;
-  }
-  if (body.currency !== undefined && !isCurrencyCode(String(body.currency))) {
-    res.status(400).json({ error: 'Moeda inválida' });
-    return;
-  }
-  if (body.vatDeductible !== undefined && body.vatDeductible !== null && typeof body.vatDeductible !== 'boolean') {
-    res.status(400).json({ error: 'vatDeductible tem de ser true, false ou null' });
-    return;
-  }
-
-  try {
-    const existing = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
-    if (!existing) {
+expensesRouter.get(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const expense = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
+    if (!expense) {
       res.status(404).json({ error: 'Despesa não encontrada' });
       return;
     }
+    res.json(toExpenseJson(expense));
+  }),
+);
 
-    // Coerência fiscal sobre o estado FINAL (existente + alterações) — uma
-    // edição parcial não pode deixar a despesa incoerente. Se o estado final
-    // é SUBMETIDA (confirmação da fila manual ou edição de uma já submetida),
-    // os três valores tornam-se obrigatórios.
-    const nextStatus = (body.status as string | undefined) ?? existing.status;
-    const nextBase = body.amountBase !== undefined ? toOptionalFloat(body.amountBase) : existing.amountBase;
-    const nextVat = body.amountVat !== undefined ? toOptionalFloat(body.amountVat) : existing.amountVat;
-    const nextTotal = body.amountTotal !== undefined ? toOptionalFloat(body.amountTotal) : existing.amountTotal;
-    if (nextStatus === 'SUBMETIDA' && !hasAllAmounts(nextBase, nextVat, nextTotal)) {
+expensesRouter.post(
+  '/',
+  heavyRouteRateLimit,
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    const body = req.body as Record<string, string>;
+
+    if (!body.type || !(await isValidCategoryKey(req.user!.id, body.type))) {
+      res.status(400).json({ error: 'Tipo de despesa inválido' });
+      return;
+    }
+    const source = body.source ?? 'CAMERA';
+    if (!VALID_SOURCES.includes(source)) {
+      res.status(400).json({ error: 'Origem inválida' });
+      return;
+    }
+    if (body.currency && !isCurrencyCode(body.currency)) {
+      res.status(400).json({ error: 'Moeda inválida' });
+      return;
+    }
+    // existingFilePath vem do cliente (referência a um ficheiro já gravado por
+    // /expenses/extract) — tem de corresponder exatamente ao formato gerado pelo
+    // servidor, senão um valor como "../../../.env" permitiria ler/apagar
+    // ficheiros arbitrários mais abaixo (deleteUploadedFile/arquivo no Drive).
+    if (!req.file && body.existingFilePath && !resolveSafeUploadPath(body.existingFilePath)) {
+      res.status(400).json({ error: 'Caminho de ficheiro inválido' });
+      return;
+    }
+    // O fileFilter do multer só vê o Content-Type DECLARADO no pedido
+    // multipart (falsificável) — ao contrário de /extract, esta rota nunca
+    // decodifica o ficheiro, por isso confirma aqui os bytes reais antes de
+    // o gravar como o original de uma despesa.
+    if (req.file) {
+      const fileBuffer = fs.readFileSync(req.file.path);
+      if (!detectRealFileType(fileBuffer)) {
+        deleteUploadedFile(`uploads/${req.file.filename}`);
+        res.status(400).json({ error: 'Tipo de ficheiro não suportado — só são aceites imagens ou PDF' });
+        return;
+      }
+    }
+
+    // Coerência fiscal (POST cria sempre despesas SUBMETIDAS): os três valores
+    // são obrigatórios, base + IVA tem de bater com o total (tolerância de
+    // 1 cêntimo para arredondamentos multi-taxa), e o NIF do prestador nunca
+    // pode ser o mesmo que o do utente.
+    const postBase = toOptionalFloat(body.amountBase);
+    const postVat = toOptionalFloat(body.amountVat);
+    const postTotal = toOptionalFloat(body.amountTotal);
+    if (!hasAllAmounts(postBase, postVat, postTotal)) {
       res.status(400).json({ error: 'Preenche os três valores: base, IVA e total.' });
       return;
     }
-    if (!amountsAreConsistent(nextBase, nextVat, nextTotal)) {
+    if (!amountsAreConsistent(postBase, postVat, postTotal)) {
       res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
       return;
     }
-    // Mesma regra do POST: só obrigatório sobre o estado final quando a conta
-    // tem a classificação de IVA dedutível ativa.
-    const nextVatDeductible =
-      body.vatDeductible !== undefined ? (body.vatDeductible as boolean | null) : existing.vatDeductible;
-    if (nextStatus === 'SUBMETIDA' && req.user!.vatClassificationEnabled && nextVatDeductible == null) {
-      res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
-      return;
-    }
-    const nextSupplierNif = body.supplierNif !== undefined ? (body.supplierNif as string) : existing.supplierNif;
-    const nextAcquirerNif = body.acquirerNif !== undefined ? (body.acquirerNif as string) : existing.acquirerNif;
-    if (!nifsAreDistinct(nextSupplierNif, nextAcquirerNif)) {
+    if (!nifsAreDistinct(body.supplierNif, body.acquirerNif)) {
       res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
       return;
     }
 
-    const expense = await prisma.expense.update({
-      where: { id: req.params.id },
+    // Classificação de IVA dedutível: só obrigatória quando a conta a tem ativa
+    // (User.vatClassificationEnabled) — para quem nunca a liga, o fluxo é
+    // exatamente o de sempre.
+    const postVatDeductible = toOptionalBoolean(body.vatDeductible);
+    if (req.user!.vatClassificationEnabled && postVatDeductible === undefined) {
+      res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
+      return;
+    }
+
+    // Deteção de duplicados: mesmo fornecedor (NIF) + mesmo nº de documento já
+    // submetido antes. Só é possível verificar quando ambos os campos estão
+    // preenchidos (ex: faturas sem QR, inseridas à mão, podem não ter nº de
+    // documento). O cliente confirma explicitamente a substituição enviando
+    // "replaceExpenseId" — só nesse caso o registo antigo é apagado.
+    const replaceExpenseId = body.replaceExpenseId || undefined;
+    if (body.supplierNif && body.documentId && !replaceExpenseId) {
+      const duplicate = await prisma.expense.findFirst({
+        where: { userId: req.user!.id, status: 'SUBMETIDA', supplierNif: body.supplierNif, documentId: body.documentId },
+      });
+      if (duplicate) {
+        res.status(409).json({
+          error: 'Já existe uma despesa deste fornecedor com o mesmo número de documento.',
+          existingId: duplicate.id,
+        });
+        return;
+      }
+    }
+
+    if (replaceExpenseId) {
+      const existing = await prisma.expense.findFirst({ where: { id: replaceExpenseId, userId: req.user!.id } });
+      if (existing) {
+        deleteUploadedFile(existing.originalFilePath);
+        await prisma.expense.delete({ where: { id: replaceExpenseId } });
+      }
+    }
+
+    const expense = await prisma.expense.create({
       data: {
-        status: body.status as string | undefined,
-        type: body.type as string | undefined,
-        supplierName: body.supplierName as string | undefined,
-        supplierNif: body.supplierNif as string | undefined,
-        acquirerNif: body.acquirerNif as string | undefined,
-        documentType: body.documentType as string | undefined,
-        documentId: body.documentId as string | undefined,
-        documentDate: body.documentDate as string | undefined,
-        documentTime: body.documentTime as string | undefined,
+        userId: req.user!.id,
+        status: 'SUBMETIDA',
+        source,
+        type: body.type,
+        supplierName: body.supplierName || undefined,
+        supplierNif: body.supplierNif || undefined,
+        acquirerNif: body.acquirerNif || undefined,
+        documentType: body.documentType || undefined,
+        documentId: body.documentId || undefined,
+        documentDate: body.documentDate || undefined,
+        documentTime: body.documentTime || undefined,
         amountBase: toOptionalFloat(body.amountBase),
         amountVat: toOptionalFloat(body.amountVat),
         amountTotal: toOptionalFloat(body.amountTotal),
-        currency: body.currency as string | undefined,
-        // Voltar a EUR limpa os valores na moeda original — deixam de fazer sentido.
-        originalAmountBase: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountBase),
-        originalAmountVat: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountVat),
-        originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
-        vatDeductible: body.vatDeductible as boolean | null | undefined,
+        currency: body.currency || 'EUR',
+        originalAmountBase: toOptionalFloat(body.originalAmountBase),
+        originalAmountVat: toOptionalFloat(body.originalAmountVat),
+        originalAmountTotal: toOptionalFloat(body.originalAmountTotal),
+        qrRawPayload: body.qrRawPayload || undefined,
+        // Upload manual/email já processado por /expenses/extract ou pelo poller do
+        // Gmail — o ficheiro já está em uploads/, não é preciso reenviar os bytes.
+        originalFilePath: req.file ? `uploads/${req.file.filename}` : body.existingFilePath || undefined,
+        vatDeductible: postVatDeductible ?? null,
       },
     });
-    // Arquiva no Drive qualquer despesa submetida que ainda não tenha ficheiro
-    // lá (driveFileId null): cobre as despesas vindas do email (que só chegam a
-    // SUBMETIDA por aqui — o POST / nunca as vê) e serve de retry natural para
-    // arquivos que falharam na criação (ex: token inválido na altura) — basta
-    // guardar a despesa outra vez. driveFileId preenchido garante idempotência.
-    if (expense.status === 'SUBMETIDA' && !expense.driveFileId) {
-      archiveInvoiceToDriveBestEffort(req.user!, expense);
-    }
-    if (expense.status === 'SUBMETIDA') {
-      void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
-    }
-    scheduleSheetsSyncSoon(req.user!.id);
-    res.json(toExpenseJson(expense));
-  } catch {
-    res.status(404).json({ error: 'Despesa não encontrada' });
-  }
-});
 
-expensesRouter.delete('/:id', async (req, res) => {
-  try {
-    const existing = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
-    if (!existing) {
-      res.status(404).json({ error: 'Despesa não encontrada' });
+    archiveInvoiceToDriveBestEffort(req.user!, expense);
+    scheduleSheetsSyncSoon(req.user!.id);
+    void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
+
+    res.status(201).json(toExpenseJson(expense));
+  }),
+);
+
+expensesRouter.patch(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    if (body.type !== undefined && !(await isValidCategoryKey(req.user!.id, String(body.type)))) {
+      res.status(400).json({ error: 'Tipo de despesa inválido' });
       return;
     }
-    const expense = await prisma.expense.delete({ where: { id: req.params.id } });
-    deleteUploadedFile(expense.originalFilePath);
-    scheduleSheetsSyncSoon(req.user!.id);
-    res.status(204).send();
-  } catch {
-    res.status(404).json({ error: 'Despesa não encontrada' });
-  }
-});
+    if (body.status !== undefined && !isExpenseStatus(String(body.status))) {
+      res.status(400).json({ error: 'Estado inválido' });
+      return;
+    }
+    if (body.currency !== undefined && !isCurrencyCode(String(body.currency))) {
+      res.status(400).json({ error: 'Moeda inválida' });
+      return;
+    }
+    if (body.vatDeductible !== undefined && body.vatDeductible !== null && typeof body.vatDeductible !== 'boolean') {
+      res.status(400).json({ error: 'vatDeductible tem de ser true, false ou null' });
+      return;
+    }
+
+    try {
+      const existing = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
+      if (!existing) {
+        res.status(404).json({ error: 'Despesa não encontrada' });
+        return;
+      }
+
+      // Coerência fiscal sobre o estado FINAL (existente + alterações) — uma
+      // edição parcial não pode deixar a despesa incoerente. Se o estado final
+      // é SUBMETIDA (confirmação da fila manual ou edição de uma já submetida),
+      // os três valores tornam-se obrigatórios.
+      const nextStatus = (body.status as string | undefined) ?? existing.status;
+      const nextBase = body.amountBase !== undefined ? toOptionalFloat(body.amountBase) : existing.amountBase;
+      const nextVat = body.amountVat !== undefined ? toOptionalFloat(body.amountVat) : existing.amountVat;
+      const nextTotal = body.amountTotal !== undefined ? toOptionalFloat(body.amountTotal) : existing.amountTotal;
+      if (nextStatus === 'SUBMETIDA' && !hasAllAmounts(nextBase, nextVat, nextTotal)) {
+        res.status(400).json({ error: 'Preenche os três valores: base, IVA e total.' });
+        return;
+      }
+      if (!amountsAreConsistent(nextBase, nextVat, nextTotal)) {
+        res.status(400).json({ error: 'Os valores não batem certo: base + IVA tem de ser igual ao total.' });
+        return;
+      }
+      // Mesma regra do POST: só obrigatório sobre o estado final quando a conta
+      // tem a classificação de IVA dedutível ativa.
+      const nextVatDeductible =
+        body.vatDeductible !== undefined ? (body.vatDeductible as boolean | null) : existing.vatDeductible;
+      if (nextStatus === 'SUBMETIDA' && req.user!.vatClassificationEnabled && nextVatDeductible == null) {
+        res.status(400).json({ error: 'Escolhe se a despesa é IVA dedutível.' });
+        return;
+      }
+      const nextSupplierNif = body.supplierNif !== undefined ? (body.supplierNif as string) : existing.supplierNif;
+      const nextAcquirerNif = body.acquirerNif !== undefined ? (body.acquirerNif as string) : existing.acquirerNif;
+      if (!nifsAreDistinct(nextSupplierNif, nextAcquirerNif)) {
+        res.status(400).json({ error: 'O NIF do prestador e o NIF do utente não podem ser iguais.' });
+        return;
+      }
+
+      const expense = await prisma.expense.update({
+        where: { id: req.params.id },
+        data: {
+          status: body.status as string | undefined,
+          type: body.type as string | undefined,
+          supplierName: body.supplierName as string | undefined,
+          supplierNif: body.supplierNif as string | undefined,
+          acquirerNif: body.acquirerNif as string | undefined,
+          documentType: body.documentType as string | undefined,
+          documentId: body.documentId as string | undefined,
+          documentDate: body.documentDate as string | undefined,
+          documentTime: body.documentTime as string | undefined,
+          amountBase: toOptionalFloat(body.amountBase),
+          amountVat: toOptionalFloat(body.amountVat),
+          amountTotal: toOptionalFloat(body.amountTotal),
+          currency: body.currency as string | undefined,
+          // Voltar a EUR limpa os valores na moeda original — deixam de fazer sentido.
+          originalAmountBase: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountBase),
+          originalAmountVat: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountVat),
+          originalAmountTotal: body.currency === 'EUR' ? null : toOptionalFloat(body.originalAmountTotal),
+          vatDeductible: body.vatDeductible as boolean | null | undefined,
+        },
+      });
+      // Arquiva no Drive qualquer despesa submetida que ainda não tenha ficheiro
+      // lá (driveFileId null): cobre as despesas vindas do email (que só chegam a
+      // SUBMETIDA por aqui — o POST / nunca as vê) e serve de retry natural para
+      // arquivos que falharam na criação (ex: token inválido na altura) — basta
+      // guardar a despesa outra vez. driveFileId preenchido garante idempotência.
+      if (expense.status === 'SUBMETIDA' && !expense.driveFileId) {
+        archiveInvoiceToDriveBestEffort(req.user!, expense);
+      }
+      if (expense.status === 'SUBMETIDA') {
+        void learnVatDeductible(req.user!.id, req.user!.vatAutoFillMode, expense.supplierNif, expense.type, expense.vatDeductible);
+      }
+      scheduleSheetsSyncSoon(req.user!.id);
+      res.json(toExpenseJson(expense));
+    } catch {
+      res.status(404).json({ error: 'Despesa não encontrada' });
+    }
+  }),
+);
+
+expensesRouter.delete(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    try {
+      const existing = await prisma.expense.findFirst({ where: { id: req.params.id, userId: req.user!.id } });
+      if (!existing) {
+        res.status(404).json({ error: 'Despesa não encontrada' });
+        return;
+      }
+      const expense = await prisma.expense.delete({ where: { id: req.params.id } });
+      deleteUploadedFile(expense.originalFilePath);
+      scheduleSheetsSyncSoon(req.user!.id);
+      res.status(204).send();
+    } catch {
+      res.status(404).json({ error: 'Despesa não encontrada' });
+    }
+  }),
+);

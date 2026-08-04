@@ -10,6 +10,8 @@ import {
   exchangeAuthCodeForTokens,
   verifyGoogleIdToken,
 } from '../services/google-auth.service';
+import { asyncHandler } from '../utils/async-handler';
+import { authRateLimit } from '../middleware/rate-limit';
 
 export const authRouter = Router();
 
@@ -20,105 +22,117 @@ function hashToken(token: string): string {
 }
 
 // Passo de login em si — não pode exigir sessão porque é aqui que a sessão nasce.
-authRouter.post('/google/callback', async (req, res) => {
-  const { code, redirectUri, codeVerifier, clientId } = req.body as {
-    code?: string;
-    redirectUri?: string;
-    codeVerifier?: string;
-    clientId?: string;
-  };
-  if (!code || !redirectUri) {
-    res.status(400).json({ error: 'code e redirectUri são obrigatórios' });
-    return;
-  }
-  // Diagnóstico: sem esta linha, um login BEM-sucedido não deixava rasto
-  // nenhum nos logs, tornando impossível distinguir "o pedido nunca chegou"
-  // de "chegou e correu bem" ao investigar problemas de login.
-  console.log(`[auth] callback google recebido (redirectUri=${redirectUri})`);
-
-  try {
-    const { idToken, refreshToken, usedClientId } = await exchangeAuthCodeForTokens(
-      code,
-      redirectUri,
-      codeVerifier,
-      clientId,
-    );
-    const identity = await verifyGoogleIdToken(idToken);
-    if (!identity.emailVerified) {
-      res.status(401).json({ error: 'O email da conta Google não está verificado' });
+authRouter.post(
+  '/google/callback',
+  authRateLimit,
+  asyncHandler(async (req, res) => {
+    const { code, redirectUri, codeVerifier, clientId } = req.body as {
+      code?: string;
+      redirectUri?: string;
+      codeVerifier?: string;
+      clientId?: string;
+    };
+    if (!code || !redirectUri) {
+      res.status(400).json({ error: 'code e redirectUri são obrigatórios' });
       return;
     }
+    // Diagnóstico: sem esta linha, um login BEM-sucedido não deixava rasto
+    // nenhum nos logs, tornando impossível distinguir "o pedido nunca chegou"
+    // de "chegou e correu bem" ao investigar problemas de login.
+    console.log(`[auth] callback google recebido (redirectUri=${redirectUri})`);
 
-    // Allowlist de acesso: com ALLOWED_LOGIN_EMAILS definida (lista separada
-    // por vírgulas, no Render), só essas contas Google conseguem iniciar
-    // sessão — sem isto, qualquer pessoa que descobrisse a app podia entrar
-    // com a conta dela e usar o servidor. Sem a variável, mantém-se o
-    // comportamento aberto (evita lockout se a env ainda não estiver definida).
-    const allowedEmails = (process.env.ALLOWED_LOGIN_EMAILS ?? '')
-      .split(',')
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean);
-    if (allowedEmails.length > 0 && !allowedEmails.includes(identity.email.toLowerCase())) {
-      console.warn(`[auth] login recusado para conta fora da allowlist: ${identity.email}`);
-      res.status(403).json({ error: 'Esta conta não tem acesso à aplicação' });
-      return;
+    try {
+      const { idToken, refreshToken, usedClientId } = await exchangeAuthCodeForTokens(
+        code,
+        redirectUri,
+        codeVerifier,
+        clientId,
+      );
+      const identity = await verifyGoogleIdToken(idToken);
+      if (!identity.emailVerified) {
+        res.status(401).json({ error: 'O email da conta Google não está verificado' });
+        return;
+      }
+
+      // Allowlist de acesso: com ALLOWED_LOGIN_EMAILS definida (lista separada
+      // por vírgulas, no Render), só essas contas Google conseguem iniciar
+      // sessão — sem isto, qualquer pessoa que descobrisse a app podia entrar
+      // com a conta dela e usar o servidor. Sem a variável, mantém-se o
+      // comportamento aberto (evita lockout se a env ainda não estiver definida).
+      const allowedEmails = (process.env.ALLOWED_LOGIN_EMAILS ?? '')
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean);
+      if (allowedEmails.length > 0 && !allowedEmails.includes(identity.email.toLowerCase())) {
+        console.warn(`[auth] login recusado para conta fora da allowlist: ${identity.email}`);
+        res.status(403).json({ error: 'Esta conta não tem acesso à aplicação' });
+        return;
+      }
+
+      const existing = await prisma.user.findUnique({ where: { googleId: identity.sub } });
+      // O Google só devolve refresh_token no primeiro consentimento — num
+      // re-login normal não vem nenhum, e não podemos apagar um que já exista.
+      // googleAuthClientId acompanha sempre o token: um refresh token só é
+      // utilizável pelo cliente (web/iOS) que o emitiu.
+      const encryptedRefreshToken = refreshToken ? encryptRefreshToken(refreshToken) : undefined;
+      const refreshTokenFields = encryptedRefreshToken
+        ? { googleRefreshTokenEnc: encryptedRefreshToken, googleAuthClientId: usedClientId }
+        : {};
+
+      const user = existing
+        ? await prisma.user.update({
+            where: { id: existing.id },
+            data: {
+              email: identity.email,
+              ...refreshTokenFields,
+            },
+          })
+        : await prisma.user.create({
+            data: {
+              email: identity.email,
+              googleId: identity.sub,
+              ...refreshTokenFields,
+            },
+          });
+
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      await prisma.session.create({
+        data: {
+          userId: user.id,
+          tokenHash: hashToken(sessionToken),
+          expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+        },
+      });
+
+      console.log(`[auth] sessão iniciada: ${user.email}`);
+      res.json({ sessionToken, user: { id: user.id, email: user.email } });
+    } catch (err) {
+      console.error('[auth] falha no login com Google', err);
+      res.status(401).json({ error: 'Falha na autenticação com o Google' });
     }
+  }),
+);
 
-    const existing = await prisma.user.findUnique({ where: { googleId: identity.sub } });
-    // O Google só devolve refresh_token no primeiro consentimento — num
-    // re-login normal não vem nenhum, e não podemos apagar um que já exista.
-    // googleAuthClientId acompanha sempre o token: um refresh token só é
-    // utilizável pelo cliente (web/iOS) que o emitiu.
-    const encryptedRefreshToken = refreshToken ? encryptRefreshToken(refreshToken) : undefined;
-    const refreshTokenFields = encryptedRefreshToken
-      ? { googleRefreshTokenEnc: encryptedRefreshToken, googleAuthClientId: usedClientId }
-      : {};
+authRouter.post(
+  '/logout',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const authHeader = req.header('authorization') ?? req.header('Authorization');
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : undefined;
+    if (token) {
+      await prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
+    }
+    res.status(204).send();
+  }),
+);
 
-    const user = existing
-      ? await prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            email: identity.email,
-            ...refreshTokenFields,
-          },
-        })
-      : await prisma.user.create({
-          data: {
-            email: identity.email,
-            googleId: identity.sub,
-            ...refreshTokenFields,
-          },
-        });
-
-    const sessionToken = crypto.randomBytes(32).toString('hex');
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        tokenHash: hashToken(sessionToken),
-        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
-      },
-    });
-
-    console.log(`[auth] sessão iniciada: ${user.email}`);
-    res.json({ sessionToken, user: { id: user.id, email: user.email } });
-  } catch (err) {
-    console.error('[auth] falha no login com Google', err);
-    res.status(401).json({ error: 'Falha na autenticação com o Google' });
-  }
-});
-
-authRouter.post('/logout', requireAuth, async (req, res) => {
-  const authHeader = req.header('authorization') ?? req.header('Authorization');
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : undefined;
-  if (token) {
-    await prisma.session.deleteMany({ where: { tokenHash: hashToken(token) } });
-  }
-  res.status(204).send();
-});
-
-authRouter.get('/me', requireAuth, async (req, res) => {
-  res.json({ id: req.user!.id, email: req.user!.email });
-});
+authRouter.get(
+  '/me',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    res.json({ id: req.user!.id, email: req.user!.email });
+  }),
+);
 
 // Eliminação de conta na própria app — exigência da App Store (guideline
 // 5.1.1(v)): apps com criação de conta têm de permitir eliminá-la sem passar
@@ -128,49 +142,59 @@ authRouter.get('/me', requireAuth, async (req, res) => {
 // estão no Drive DELE, fora do nosso sistema; remover o acesso da app à conta
 // Google faz-se em myaccount.google.com/connections (dito na política de
 // privacidade).
-authRouter.delete('/account', requireAuth, async (req, res) => {
-  const userId = req.user!.id;
-  try {
-    const [expenses, user] = await Promise.all([
-      prisma.expense.findMany({ where: { userId }, select: { originalFilePath: true } }),
-      prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshTokenEnc: true } }),
-    ]);
-    for (const expense of expenses) {
-      const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
-      if (!absolutePath) continue;
-      try {
-        fs.unlinkSync(absolutePath);
-      } catch {
-        // best-effort: o disco do Render é efémero, o ficheiro pode já não existir
+authRouter.delete(
+  '/account',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.id;
+    try {
+      const [expenses, user] = await Promise.all([
+        prisma.expense.findMany({ where: { userId }, select: { originalFilePath: true } }),
+        prisma.user.findUnique({ where: { id: userId }, select: { googleRefreshTokenEnc: true } }),
+      ]);
+      for (const expense of expenses) {
+        const absolutePath = resolveSafeUploadPath(expense.originalFilePath);
+        if (!absolutePath) continue;
+        try {
+          fs.unlinkSync(absolutePath);
+        } catch {
+          // best-effort: o disco do Render é efémero, o ficheiro pode já não existir
+        }
       }
-    }
-    // Revoga a autorização OAuth do lado da Google — sem isto, a app deixa de
-    // conseguir usá-la mas a autorização continua ativa em myaccount.google.com
-    // até o utilizador a remover manualmente (guideline 5.1.1(v) exige um
-    // mecanismo de revogação a partir da própria app).
-    if (user?.googleRefreshTokenEnc) {
-      try {
-        const refreshToken = decryptRefreshToken(user.googleRefreshTokenEnc);
-        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, {
-          method: 'POST',
-        });
-      } catch (err) {
-        // best-effort: não bloqueia a eliminação da conta se a Google não responder
-        console.error(`[auth] falha ao revogar token Google ao eliminar conta ${req.user!.email}`, err);
+      // Revoga a autorização OAuth do lado da Google — sem isto, a app deixa de
+      // conseguir usá-la mas a autorização continua ativa em myaccount.google.com
+      // até o utilizador a remover manualmente (guideline 5.1.1(v) exige um
+      // mecanismo de revogação a partir da própria app).
+      if (user?.googleRefreshTokenEnc) {
+        try {
+          const refreshToken = decryptRefreshToken(user.googleRefreshTokenEnc);
+          await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, {
+            method: 'POST',
+          });
+        } catch (err) {
+          // best-effort: não bloqueia a eliminação da conta se a Google não responder
+          console.error(`[auth] falha ao revogar token Google ao eliminar conta ${req.user!.email}`, err);
+        }
       }
+      // Tudo ou nada: sem transação, uma falha a meio (ex: ligação à BD cai
+      // entre dois deleteMany) podia deixar a conta parcialmente apagada mas
+      // ainda válida/acessível, com alguns dos seus próprios dados já
+      // perdidos e outros não.
+      await prisma.$transaction([
+        prisma.expense.deleteMany({ where: { userId } }),
+        prisma.monthlyReportStatus.deleteMany({ where: { userId } }),
+        prisma.expenseCategory.deleteMany({ where: { userId } }),
+        prisma.acquirerNifDisplay.deleteMany({ where: { userId } }),
+        prisma.supplierVatDefault.deleteMany({ where: { userId } }),
+        prisma.supplierCategoryDefault.deleteMany({ where: { userId } }),
+        prisma.session.deleteMany({ where: { userId } }),
+        prisma.user.delete({ where: { id: userId } }),
+      ]);
+      console.log(`[auth] conta eliminada: ${req.user!.email}`);
+      res.status(204).send();
+    } catch (err) {
+      console.error(`[auth] falha ao eliminar a conta ${req.user!.email}`, err);
+      res.status(500).json({ error: 'Falha ao eliminar a conta' });
     }
-    await prisma.expense.deleteMany({ where: { userId } });
-    await prisma.monthlyReportStatus.deleteMany({ where: { userId } });
-    await prisma.expenseCategory.deleteMany({ where: { userId } });
-    await prisma.acquirerNifDisplay.deleteMany({ where: { userId } });
-    await prisma.supplierVatDefault.deleteMany({ where: { userId } });
-    await prisma.supplierCategoryDefault.deleteMany({ where: { userId } });
-    await prisma.session.deleteMany({ where: { userId } });
-    await prisma.user.delete({ where: { id: userId } });
-    console.log(`[auth] conta eliminada: ${req.user!.email}`);
-    res.status(204).send();
-  } catch (err) {
-    console.error(`[auth] falha ao eliminar a conta ${req.user!.email}`, err);
-    res.status(500).json({ error: 'Falha ao eliminar a conta' });
-  }
-});
+  }),
+);

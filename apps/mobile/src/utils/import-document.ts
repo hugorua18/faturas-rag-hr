@@ -1,7 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Image as RNImage } from 'react-native';
+import { Image as RNImage, Platform } from 'react-native';
+import { Paths } from 'expo-file-system';
 import { router } from 'expo-router';
 
 import { setPendingCapture } from '@/state/pending-capture';
@@ -54,6 +55,20 @@ export function normalizeSharedFileUrl(rawUrl: string): string | null {
   return null;
 }
 
+// "invoicescanner://" é um scheme público — qualquer site ou app pode invocar
+// um deep link com esse prefixo, não só o "Abrir em..." genuíno do iOS. Antes
+// de tratar o caminho reescrito como um ficheiro partilhado legítimo, confirma
+// que fica mesmo dentro do contentor desta app (onde o "Abrir em..." entrega
+// os ficheiros de verdade) — nunca um caminho arbitrário fora da sandbox.
+// Só se aplica ao iOS (onde este mecanismo existe); noutras plataformas o
+// formato de Paths.document.uri é diferente e a verificação não se aplica.
+function isWithinAppSandbox(fileUri: string): boolean {
+  if (Platform.OS !== 'ios') return true;
+  const containerMatch = Paths.document.uri.match(/^(file:\/\/.*\/Containers\/Data\/Application\/[^/]+)\//);
+  if (!containerMatch) return true; // formato inesperado (ex: simulador antigo) — não bloqueia o fluxo legítimo
+  return fileUri.startsWith(containerMatch[1]);
+}
+
 // Ficheiro entregue pelo iOS via share sheet / "Abrir em…" (CFBundleDocumentTypes
 // no app.json). Em vez de extrair aqui (que deixava o utilizador preso no ecrã
 // "Unmatched Route" do expo-router enquanto o upload corria), navega já para o
@@ -61,7 +76,7 @@ export function normalizeSharedFileUrl(rawUrl: string): string | null {
 // próprio, com o estado "A analisar a fatura…".
 export function importSharedFile(rawUrl: string): boolean {
   const fileUri = normalizeSharedFileUrl(rawUrl);
-  if (!fileUri) return false;
+  if (!fileUri || !isWithinAppSandbox(fileUri)) return false;
   const name = decodeURIComponent(fileUri.split('/').pop() ?? '') || 'documento';
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const mimeType = SHARED_FILE_MIME_TYPES[ext];

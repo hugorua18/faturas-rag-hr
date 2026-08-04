@@ -1,8 +1,17 @@
 import path from 'node:path';
 import { createCanvas, loadImage, DOMMatrix, type Image } from '@napi-rs/canvas';
 import jsQR from 'jsqr';
+import { imageSize } from 'image-size';
 import { parseInvoiceQr, type ParsedInvoiceQr } from '@invoice-scanner/shared';
 import { extractOcrFieldsCascaded, type OcrFields } from './ocr.service';
+
+// Um PDF/imagem pequeno em bytes pode declarar dimensões gigantescas (ex: um
+// PNG com um cabeçalho a alegar 50000x50000 píxeis, ou um MediaBox de PDF
+// enorme) — decodificar isso aloca memória proporcional aos píxeis, não aos
+// bytes comprimidos, e pode esgotar a memória do processo (o limite de 20MB
+// do multer só limita o tamanho no disco, não o resultado descomprimido).
+// 40 megapíxeis é generoso para qualquer foto/scan real de fatura.
+const MAX_DECODED_PIXELS = 40_000_000;
 
 // pdf.js pede um DOMMatrix global para renderizar em Node (normalmente só existe no browser).
 (global as unknown as { DOMMatrix?: unknown }).DOMMatrix ??= DOMMatrix;
@@ -24,6 +33,9 @@ async function renderPdfFirstPageToPng(buffer: Buffer): Promise<Buffer> {
   const pdf = await pdfjsLib.getDocument({ data, standardFontDataUrl }).promise;
   const page = await pdf.getPage(1);
   const viewport = page.getViewport({ scale: 2.0 });
+  if (viewport.width * viewport.height > MAX_DECODED_PIXELS) {
+    throw new Error('Página do PDF excede o tamanho máximo suportado');
+  }
   const canvas = createCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext('2d');
   await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport, canvas: canvas as unknown as HTMLCanvasElement }).promise;
@@ -82,6 +94,21 @@ export async function ingestDocument(
     imageMimeType = mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
   } else {
     throw new Error(`Tipo de ficheiro não suportado: ${mimeType}`);
+  }
+
+  // Lê só o cabeçalho (sem descodificar píxeis) para rejeitar uma "bomba de
+  // descompressão" antes de loadImage alocar a bitmap completa — um ficheiro
+  // pequeno pode declarar dimensões enormes. Falha a ler o cabeçalho (formato
+  // que o image-size não reconhece mas o @napi-rs/canvas suporta) não deve
+  // bloquear o caminho já existente, por isso segue em frente nesse caso.
+  try {
+    const declared = imageSize(imageBuffer);
+    if (declared.width * declared.height > MAX_DECODED_PIXELS) {
+      throw new Error('Imagem excede o tamanho máximo suportado');
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Imagem excede o tamanho máximo suportado') throw err;
+    // cabeçalho não reconhecido pelo image-size — recua para o comportamento anterior
   }
 
   // A imagem é decodificada UMA vez e reutilizada pelo QR e pelo OCR — a

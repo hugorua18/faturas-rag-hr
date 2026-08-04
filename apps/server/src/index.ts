@@ -20,6 +20,12 @@ import { fetchDriveFileBuffer, detectFileMimeType } from './services/drive.servi
 const app = express();
 const port = Number(process.env.PORT) || 4001;
 
+// O Render está sempre atrás de um proxy reverso — sem isto, req.ip via o IP
+// interno do proxy (não o do chamador real) e o express-rate-limit recusa-se
+// mesmo a arrancar (X-Forwarded-For presente sem trust proxy configurado é
+// tratado como possível tentativa de contornar o limite por IP).
+app.set('trust proxy', 1);
+
 // Sem lista de origens confiáveis, app.use(cors()) reflete/permite qualquer
 // origem — remove uma camada de defesa. A app nativa (iOS/Android) não envia
 // header Origin, por isso não é afetada por esta lista.
@@ -36,6 +42,16 @@ app.use(
   }),
 );
 app.use(express.json());
+
+// Sem isto, um browser podia tentar "adivinhar" o tipo real de um ficheiro
+// servido (ex: /uploads/:filename) a partir do conteúdo em vez do
+// Content-Type declarado — relevante porque esse Content-Type vem só da
+// extensão gravada (ver detectRealFileType em routes/expenses.ts para a
+// validação do conteúdo em si, que é a defesa principal).
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
 
 // As imagens/PDFs de faturas só são servidos com uma URL assinada de curta
 // duração (ver utils/uploads-path.ts) — nunca por express.static sem
@@ -127,6 +143,20 @@ app.use('/supplier-category-defaults', requireAuth, supplierCategoryDefaultsRout
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[error]', err.message);
   res.status(400).json({ error: err.message || 'Pedido inválido' });
+});
+
+// Rede de segurança para o que fica fora de um pedido HTTP (ex: os timers do
+// poller de email/exportação para Sheets, que já se protegem individualmente
+// com try/catch, mas um terceiro código que escape a essa proteção não deve
+// derrubar o processo inteiro — só regista e continua). Os handlers de rota
+// em si já não dependem disto: passam todos por asyncHandler (ver
+// utils/async-handler.ts), que reencaminha qualquer rejeição para o
+// middleware de erro do Express em vez de a deixar por tratar.
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] promise rejeitada sem handler', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[server] exceção não apanhada', err);
 });
 
 app.listen(port, () => {

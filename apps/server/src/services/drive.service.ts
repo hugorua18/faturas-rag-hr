@@ -7,6 +7,7 @@ import { NO_DATE_KEY, NO_NIF_KEY } from '@invoice-scanner/shared';
 import { prisma } from '../db/prisma';
 import { decryptRefreshToken } from './google-auth.service';
 import { resolveSafeUploadPath } from '../utils/uploads-path';
+import { detectRealFileType } from '../utils/file-signature';
 
 // Mesmas variáveis do Google Sign-In (Fase 7) — NÃO as do poller do Gmail
 // (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN), que são um fluxo
@@ -188,13 +189,11 @@ export async function fetchDriveFileBuffer(
 // Content-Type pelos bytes (magic numbers) — os headers do Drive não são
 // fiáveis entre versões do cliente e a app precisa do tipo certo para
 // renderizar a imagem/PDF.
+// Serve sempre alguma coisa (recua para "image/jpeg" quando não reconhece a
+// assinatura) — ao contrário de detectRealFileType, que existe para VALIDAR
+// um upload e por isso pode (e deve) devolver null.
 export function detectFileMimeType(buffer: Buffer): string {
-  if (buffer.length > 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-    return 'image/png';
-  }
-  if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
-  if (buffer.length > 4 && buffer.subarray(0, 4).toString('latin1') === '%PDF') return 'application/pdf';
-  return 'image/jpeg';
+  return detectRealFileType(buffer) ?? 'image/jpeg';
 }
 
 function mimeTypeForFilePath(filePath: string): string {

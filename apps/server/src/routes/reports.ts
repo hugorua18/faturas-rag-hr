@@ -5,6 +5,7 @@ import { buildMonthlyReportPdf, type ExpenseForReport } from '../services/report
 import { buildMonthlyReportExcel } from '../services/report-excel.service';
 import { uploadReportToDrive } from '../services/drive.service';
 import { ensureUserCategories } from '../services/expense-categories.service';
+import { heavyRouteRateLimit } from '../middleware/rate-limit';
 
 export const reportsRouter = Router();
 
@@ -68,7 +69,7 @@ async function loadRangeReportData(userId: string, nifParam: string, fromPeriod:
   return { expenses: expenses satisfies ExpenseForReport[] };
 }
 
-reportsRouter.get('/:nif/:period/pdf', async (req, res) => {
+reportsRouter.get('/:nif/:period/pdf', heavyRouteRateLimit, async (req, res) => {
   const { nif, period } = req.params;
   const label = typeof req.query.label === 'string' ? req.query.label : period;
   try {
@@ -95,7 +96,7 @@ reportsRouter.get('/:nif/:period/pdf', async (req, res) => {
   }
 });
 
-reportsRouter.get('/:nif/:period/xlsx', async (req, res) => {
+reportsRouter.get('/:nif/:period/xlsx', heavyRouteRateLimit, async (req, res) => {
   const { nif, period } = req.params;
   const label = typeof req.query.label === 'string' ? req.query.label : period;
   try {
@@ -123,7 +124,7 @@ reportsRouter.get('/:nif/:period/xlsx', async (req, res) => {
 
 // Registados depois de "/:nif/:period/pdf|xlsx" — caminhos com menos segmentos
 // ("/:nif/pdf" vs "/:nif/:period/pdf"), sem ambiguidade de rota no Express.
-reportsRouter.get('/:nif/pdf', async (req, res) => {
+reportsRouter.get('/:nif/pdf', heavyRouteRateLimit, async (req, res) => {
   const { nif } = req.params;
   const { from, to, label } = req.query as { from?: string; to?: string; label?: string };
   if (!from || !to) {
@@ -156,7 +157,7 @@ reportsRouter.get('/:nif/pdf', async (req, res) => {
   }
 });
 
-reportsRouter.get('/:nif/xlsx', async (req, res) => {
+reportsRouter.get('/:nif/xlsx', heavyRouteRateLimit, async (req, res) => {
   const { nif } = req.params;
   const { from, to, label } = req.query as { from?: string; to?: string; label?: string };
   if (!from || !to) {

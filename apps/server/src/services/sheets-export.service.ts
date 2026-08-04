@@ -72,6 +72,17 @@ async function ensureSpreadsheet(user: User): Promise<string> {
   return created.id;
 }
 
+// Com valueInputOption "USER_ENTERED", uma célula a começar por =, +, - ou @
+// é avaliada pelo Sheets como fórmula (injeção clássica de CSV/Sheets) — texto
+// livre vindo de faturas (nome do fornecedor, nº de documento, ...) é
+// controlado pelo utilizador ou, no caso do email de ingestão, por qualquer
+// remetente, por isso nunca pode ir para a folha sem neutralizar esse
+// prefixo primeiro. O apóstrofo inicial é a própria convenção do Sheets para
+// forçar texto literal (o mesmo que digitar '=1+1' manualmente na folha).
+function sanitizeSheetCell(value: string): string {
+  return /^[=+\-@]/.test(value) ? `'${value}` : value;
+}
+
 async function syncUserToSheet(user: User): Promise<void> {
   const expenses = await prisma.expense.findMany({
     where: { userId: user.id },
@@ -81,17 +92,17 @@ async function syncUserToSheet(user: User): Promise<void> {
   const rows = expenses.map((expense) => [
     STATUS_LABELS[expense.status] ?? expense.status,
     SOURCE_LABELS[expense.source] ?? expense.source,
-    expense.type,
-    expense.supplierName ?? '',
-    expense.supplierNif ?? '',
-    expense.acquirerNif ?? '',
-    expense.documentId ?? '',
-    expense.documentDate ?? '',
-    expense.documentTime ?? '',
+    sanitizeSheetCell(expense.type),
+    sanitizeSheetCell(expense.supplierName ?? ''),
+    sanitizeSheetCell(expense.supplierNif ?? ''),
+    sanitizeSheetCell(expense.acquirerNif ?? ''),
+    sanitizeSheetCell(expense.documentId ?? ''),
+    sanitizeSheetCell(expense.documentDate ?? ''),
+    sanitizeSheetCell(expense.documentTime ?? ''),
     expense.amountBase ?? '',
     expense.amountVat ?? '',
     expense.amountTotal ?? '',
-    (expense as { currency?: string | null }).currency ?? 'EUR',
+    sanitizeSheetCell((expense as { currency?: string | null }).currency ?? 'EUR'),
     expense.driveFileId ? `https://drive.google.com/file/d/${expense.driveFileId}/view` : '',
     expense.createdAt.toISOString().slice(0, 16).replace('T', ' '),
     expense.id,
