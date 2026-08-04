@@ -321,7 +321,11 @@ export default function ValidationScreen() {
     // resolvido (Sim/Não), para a navegação nunca acontecer antes do diálogo.
     function promptSupplierCategoryDefaultIfNeeded(onDone: () => void) {
       const nif = supplierNif.trim();
-      if (!/^\d{9}$/.test(nif) || !type || supplierCategoryDefaults[nif] !== undefined) {
+      // Espera a lista de omissões carregar (mesma corrida documentada em
+      // use-supplier-type-autofill.ts) — sem isto, uma resposta lenta do
+      // servidor faz supplierCategoryDefaults[nif] parecer "sem omissão"
+      // mesmo quando já existe uma, e o pedido sobrepõe-na sem aviso.
+      if (supplierCategoryDefaultsLoading || !/^\d{9}$/.test(nif) || !type || supplierCategoryDefaults[nif] !== undefined) {
         onDone();
         return;
       }
@@ -331,7 +335,9 @@ export default function ValidationScreen() {
         `Queres usar "${categoryLabel}" como categoria pré-definida para faturas de ${supplierName.trim() || `NIF ${nif}`}? Aparece já escolhida da próxima vez — continuas sempre a poder mudar em cada fatura.`,
         'Definir',
         () => {
-          void setSupplierCategoryDefault(nif, type).then(() => reloadSupplierCategoryDefaults());
+          setSupplierCategoryDefault(nif, type)
+            .then(() => reloadSupplierCategoryDefaults())
+            .catch((err) => console.error('[validation] falha ao definir categoria por omissão do fornecedor', err));
           onDone();
         },
         onDone,
@@ -346,7 +352,10 @@ export default function ValidationScreen() {
         'Guardada para envio automático',
         'Sem ligação à internet — a fatura fica guardada no telemóvel e é submetida automaticamente assim que a ligação voltar.',
       );
-      promptSupplierCategoryDefaultIfNeeded(() => router.replace('/expenses'));
+      // Sem ligação não há como gravar a omissão no servidor — nem vale a
+      // pena perguntar (o pedido falharia sempre); pergunta-se na próxima
+      // fatura deste fornecedor, já online.
+      router.replace('/expenses');
       return true;
     }
 
