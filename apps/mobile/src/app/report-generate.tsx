@@ -130,8 +130,14 @@ export default function ReportGenerateScreen() {
       <Stack.Screen
         options={{
           title: 'Gerar relatório',
+          // router.back() sozinho falha em silêncio se este ecrã for a
+          // primeira entrada do histórico (ex: F5 na Web, ou link direto) —
+          // sem histórico para onde voltar, "Cancelar" não fazia nada.
           headerLeft: () => (
-            <Pressable onPress={() => router.back()} hitSlop={12}>
+            <Pressable
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/expenses'))}
+              hitSlop={12}
+            >
               <Text style={{ color: theme.accent, fontSize: 16 }}>Cancelar</Text>
             </Pressable>
           ),
