@@ -97,13 +97,25 @@ function deleteUploadedFile(originalFilePath: string | null | undefined): void {
 }
 
 expensesRouter.get('/', async (req, res) => {
-  const { acquirerNif, period, status } = req.query as { acquirerNif?: string; period?: string; status?: string };
+  const { acquirerNif, period, from, to, status } = req.query as {
+    acquirerNif?: string;
+    period?: string;
+    from?: string;
+    to?: string;
+    status?: string;
+  };
   const where: Record<string, unknown> = {
     userId: req.user!.id,
     status: status && isExpenseStatus(status) ? status : 'SUBMETIDA',
   };
   if (acquirerNif) where.acquirerNif = nifFilterValue(acquirerNif);
-  if (period === NO_DATE_KEY) {
+  // "from"/"to" (datas ISO YYYY-MM-DD) cobrem um intervalo livre, possivelmente
+  // vários meses — usado pela busca de faturas no ecrã de meses. Têm
+  // prioridade sobre "period" (um único mês) quando ambos vêm no pedido, mas
+  // o cliente nunca envia os dois ao mesmo tempo.
+  if (from && to) {
+    where.documentDate = { gte: from, lte: to };
+  } else if (period === NO_DATE_KEY) {
     where.documentDate = null;
   } else if (period) {
     where.documentDate = { startsWith: period };

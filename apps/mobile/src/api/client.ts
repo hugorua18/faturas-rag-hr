@@ -131,11 +131,20 @@ export async function createExpense(
 export async function listExpenses(filter?: {
   acquirerNif?: string;
   period?: string;
+  /** Intervalo livre (YYYY-MM-DD), possivelmente vários meses — usa-se em vez de "period"
+   * para a busca de faturas no ecrã de meses (ver expenses/[nif]/index.tsx). */
+  from?: string;
+  to?: string;
   status?: ExpenseStatus;
 }): Promise<Expense[]> {
   const params = new URLSearchParams();
   if (filter?.acquirerNif) params.set('acquirerNif', filter.acquirerNif);
-  if (filter?.period) params.set('period', filter.period);
+  if (filter?.from && filter?.to) {
+    params.set('from', filter.from);
+    params.set('to', filter.to);
+  } else if (filter?.period) {
+    params.set('period', filter.period);
+  }
   if (filter?.status) params.set('status', filter.status);
   const query = params.toString();
   const response = await apiFetch(`/expenses${query ? `?${query}` : ''}`);

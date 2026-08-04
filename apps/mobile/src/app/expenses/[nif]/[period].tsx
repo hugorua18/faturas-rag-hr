@@ -1,22 +1,17 @@
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Swipeable } from 'react-native-gesture-handler';
-import {
-  EXPENSE_TYPE_LABELS,
-  REPORT_STATUS_COLORS,
-  REPORT_STATUS_LABELS,
-  isExpenseType,
-  type Expense,
-  type ReportStatus,
-} from '@invoice-scanner/shared';
+import { REPORT_STATUS_COLORS, REPORT_STATUS_LABELS, type Expense, type ReportStatus } from '@invoice-scanner/shared';
 
 import { useTheme } from '@/hooks/use-theme';
-import { deleteExpense, listExpenses, listMonthlySummaries, resolveFileUrl, updateReportStatus } from '@/api/client';
-import { DEFAULT_EXPENSE_TYPE_ICON, EXPENSE_TYPE_ICONS } from '@/constants/expense-type-icons';
+import { deleteExpense, listExpenses, listMonthlySummaries, updateReportStatus } from '@/api/client';
 import { useExpenseCategories } from '@/hooks/use-expense-categories';
-import { formatCurrency, formatPeriodLabel } from '@/utils/format';
+import { ExpenseRow } from '@/components/expense-row';
+import { ExpenseFilterPanel } from '@/components/expense-filter-panel';
+import { applyExpenseFilters, EMPTY_EXPENSE_FILTERS, hasActiveFilters, type ExpenseFilterState } from '@/utils/expense-filters';
+import { formatPeriodLabel } from '@/utils/format';
 import { confirmAction, notify } from '@/utils/alert';
 
 const NEXT_STATUS: Record<ReportStatus, ReportStatus> = {
@@ -34,6 +29,8 @@ export default function MonthlyExpenseListScreen() {
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [statusBusy, setStatusBusy] = useState(false);
+  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [filters, setFilters] = useState<ExpenseFilterState>(EMPTY_EXPENSE_FILTERS);
   const swipeableRefs = useRef<Map<string, Swipeable>>(new Map());
 
   useFocusEffect(
@@ -94,18 +91,30 @@ export default function MonthlyExpenseListScreen() {
     );
   }, []);
 
+  const filtersActive = hasActiveFilters(filters);
+  const filteredExpenses = filtersActive ? applyExpenseFilters(expenses, filters) : expenses;
+
   return (
     <View style={[styles.container, { backgroundColor: theme.groupedBackground }]}>
       <Stack.Screen
         options={{
           title: period ? formatPeriodLabel(period) : 'Despesas',
           headerRight: () => (
-            <Pressable
-              onPress={() => router.push({ pathname: '/report-generate', params: { nif, period } })}
-              hitSlop={12}
-            >
-              <Ionicons name="document-attach-outline" size={22} color={theme.accent} />
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable onPress={() => setFiltersVisible((v) => !v)} hitSlop={12}>
+                <Ionicons
+                  name={filtersActive ? 'filter' : 'filter-outline'}
+                  size={22}
+                  color={filtersActive ? theme.accent : theme.text}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => router.push({ pathname: '/report-generate', params: { nif, period } })}
+                hitSlop={12}
+              >
+                <Ionicons name="document-attach-outline" size={22} color={theme.accent} />
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -134,63 +143,41 @@ export default function MonthlyExpenseListScreen() {
           </Pressable>
         </View>
       )}
+      {filtersActive && !loading && !error && (
+        <Text style={[styles.filterCount, { color: theme.textSecondary }]}>
+          {filteredExpenses.length} de {expenses.length} {expenses.length === 1 ? 'fatura' : 'faturas'}
+        </Text>
+      )}
       <FlatList
         style={styles.list}
-        data={expenses}
+        data={filteredExpenses}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        ListEmptyComponent={
-          !loading && !error ? (
-            <Text style={[styles.empty, { color: theme.textSecondary }]}>Sem despesas neste mês.</Text>
+        ListHeaderComponent={
+          filtersVisible ? (
+            <ExpenseFilterPanel theme={theme} categories={categories} filters={filters} onChange={setFilters} />
           ) : null
         }
-        renderItem={({ item }) => {
-          const type = item.type;
-          const categoryLabel =
-            categories.find((c) => c.key === type)?.label ?? (isExpenseType(type) ? EXPENSE_TYPE_LABELS[type] : type);
-          return (
-            <Swipeable
-              ref={(ref) => {
-                if (ref) swipeableRefs.current.set(item.id, ref);
-                else swipeableRefs.current.delete(item.id);
-              }}
-              renderRightActions={() => (
-                <Pressable
-                  style={[styles.deleteAction, { backgroundColor: theme.destructive }]}
-                  onPress={() => handleDelete(item)}
-                >
-                  <Ionicons name="trash-outline" size={22} color="#FFFFFF" />
-                </Pressable>
-              )}
-            >
-              <Pressable
-                style={[styles.row, { backgroundColor: theme.card }]}
-                onPress={() => router.push(`/expense/${item.id}`)}
-              >
-                {item.fileUrl ? (
-                  <Image source={{ uri: resolveFileUrl(item.fileUrl) }} style={styles.thumb} />
-                ) : (
-                  <View style={[styles.thumb, styles.thumbPlaceholder, { backgroundColor: theme.backgroundElement }]}>
-                    <Ionicons name={EXPENSE_TYPE_ICONS[type] ?? DEFAULT_EXPENSE_TYPE_ICON} size={20} color={theme.textSecondary} />
-                  </View>
-                )}
-                <View style={styles.rowInfo}>
-                  <Text style={[styles.rowTitle, { color: theme.text }]} numberOfLines={1}>
-                    {item.supplierName || 'Fornecedor não indicado'}
-                  </Text>
-                  <Text style={[styles.rowSubtitle, { color: theme.textSecondary }]}>
-                    {categoryLabel} · {item.documentDate || 'sem data'}
-                  </Text>
-                </View>
-                <View style={styles.rowTrailing}>
-                  <Text style={[styles.rowAmount, { color: theme.text }]}>{formatCurrency(item.amountTotal)}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={theme.separator} />
-                </View>
-              </Pressable>
-            </Swipeable>
-          );
-        }}
+        ListEmptyComponent={
+          !loading && !error ? (
+            <Text style={[styles.empty, { color: theme.textSecondary }]}>
+              {filtersActive ? 'Nenhuma fatura corresponde aos filtros.' : 'Sem despesas neste mês.'}
+            </Text>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <ExpenseRow
+            theme={theme}
+            expense={item}
+            categories={categories}
+            onDelete={handleDelete}
+            swipeableRef={(ref) => {
+              if (ref) swipeableRefs.current.set(item.id, ref);
+              else swipeableRefs.current.delete(item.id);
+            }}
+          />
+        )}
       />
     </View>
   );
@@ -198,11 +185,13 @@ export default function MonthlyExpenseListScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   spinner: { marginTop: 16 },
   errorBox: { alignItems: 'center', gap: 8, marginTop: 60, paddingHorizontal: 24 },
   error: { textAlign: 'center', fontSize: 14 },
   retry: { fontSize: 14, fontWeight: '600', marginTop: 4 },
   empty: { textAlign: 'center', marginTop: 80, fontSize: 15 },
+  filterCount: { fontSize: 12.5, marginHorizontal: 16, marginTop: 8 },
   list: { flex: 1 },
   listContent: { padding: 16, paddingBottom: 48 },
   statusPill: {
@@ -217,19 +206,4 @@ const styles = StyleSheet.create({
   },
   statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
   statusLabel: { fontSize: 13, fontWeight: '600' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14 },
-  thumb: { width: 48, height: 48, borderRadius: 10 },
-  thumbPlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  rowInfo: { flex: 1, gap: 2, justifyContent: 'center' },
-  rowTitle: { fontSize: 15.5, fontWeight: '600' },
-  rowSubtitle: { fontSize: 13 },
-  rowTrailing: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  rowAmount: { fontSize: 15, fontWeight: '600' },
-  deleteAction: {
-    width: 72,
-    marginLeft: 8,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 });
