@@ -128,17 +128,52 @@ export default function SuppliersScreen() {
     }
   }
 
+  // Remove o nome do cache local e as omissões (categoria/IVA) guardadas no
+  // servidor para este NIF — nunca toca em despesas já submetidas, só deixa
+  // de haver preenchimento automático para as próximas.
+  async function performDelete(supplier: CachedSupplier) {
+    await removeCachedSupplier(supplier.nif);
+    await Promise.all([
+      setSupplierCategoryDefault(supplier.nif, null).catch((err) =>
+        console.error('[suppliers] falha ao limpar categoria por omissão', err),
+      ),
+      setSupplierVatDefault(supplier.nif, null).catch((err) =>
+        console.error('[suppliers] falha ao limpar IVA por omissão', err),
+      ),
+    ]);
+    reloadCategoryDefaults();
+    reloadVatDefaults();
+  }
+
+  // Alcance via gesto de deslizar (nativo) — em rato/trackpad (Web) o gesto
+  // nem sempre é óbvio ou fiável, por isso há também um botão equivalente
+  // dentro do modal de edição (handleDeleteFromModal).
   function handleDelete(supplier: CachedSupplier) {
     confirmAction(
       'Remover fornecedor',
       `Remover "${supplier.name}" do preenchimento automático? Isto não afeta despesas já registadas.`,
       'Remover',
       async () => {
-        await removeCachedSupplier(supplier.nif);
+        await performDelete(supplier);
         swipeableRefs.current.delete(supplier.nif);
         setSuppliers((prev) => prev.filter((s) => s.nif !== supplier.nif));
       },
       () => swipeableRefs.current.get(supplier.nif)?.close(),
+    );
+  }
+
+  function handleDeleteFromModal() {
+    if (!editing?.nif) return;
+    const supplier = editing;
+    confirmAction(
+      'Remover fornecedor',
+      `Remover "${supplier.name}" do preenchimento automático? Isto não afeta despesas já registadas.`,
+      'Remover',
+      async () => {
+        await performDelete(supplier);
+        setEditing(null);
+        reload();
+      },
     );
   }
 
@@ -291,6 +326,11 @@ export default function SuppliersScreen() {
                 <Text style={styles.saveButtonText}>{saving ? 'A guardar…' : 'Guardar'}</Text>
               </Pressable>
             </View>
+            {editing?.nif && (
+              <Pressable style={styles.deleteButton} onPress={handleDeleteFromModal} disabled={saving}>
+                <Text style={[styles.deleteButtonText, { color: theme.destructive }]}>Eliminar fornecedor</Text>
+              </Pressable>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -337,4 +377,6 @@ const styles = StyleSheet.create({
   menuCancelText: { fontSize: 15.5, fontWeight: '600' },
   saveButton: { paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 },
   saveButtonText: { fontSize: 15.5, fontWeight: '700', color: '#FFFFFF' },
+  deleteButton: { marginTop: 4, paddingVertical: 10, alignItems: 'center' },
+  deleteButtonText: { fontSize: 14.5, fontWeight: '600' },
 });
