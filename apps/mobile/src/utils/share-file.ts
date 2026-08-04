@@ -5,18 +5,20 @@ import * as Sharing from 'expo-sharing';
 export interface GeneratedReport {
   localUri: string;
   mimeType: string;
-  /** Na Web não há ficheiro local nem share sheet — já foi aberto numa nova aba. */
+  /** Na Web não há ficheiro local nem share sheet — já foi descarregado pelo browser. */
   openedInBrowser?: boolean;
 }
 
 // Passo 1: gera/descarrega o relatório sem ainda o partilhar — permite mostrar
 // "relatório gerado" e só invocar a share sheet nativa quando o utilizador
 // carregar em "Partilhar". Na Web não existe sandbox de ficheiros nem share
-// sheet, por isso abre diretamente numa nova aba (o browser trata do download).
+// sheet, por isso descarrega diretamente.
 // "headers" leva o Authorization: Bearer <token> da sessão — /reports exige
-// sessão (requireAuth) tal como /expenses. Nota: no caminho Web (window.open),
-// não é possível anexar headers a uma navegação — fica por resolver na Fase 7
-// (só afeta o preview Web, não o dispositivo/TestFlight).
+// sessão (requireAuth) tal como /expenses. window.open(url) não consegue
+// anexar esse header a uma navegação — batia sempre em 401 "Sessão em falta".
+// fetch() já suporta headers; descarrega os bytes e desencadeia a gravação via
+// um <a download> clicado por código — ao contrário de window.open chamado
+// depois de um await, isto não é bloqueado por bloqueadores de pop-up.
 export async function generateReport(
   url: string,
   filename: string,
@@ -24,8 +26,22 @@ export async function generateReport(
   headers?: Record<string, string>,
 ): Promise<GeneratedReport> {
   if (Platform.OS === 'web') {
-    window.open(url, '_blank');
-    return { localUri: url, mimeType, openedInBrowser: true };
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`Falha ao gerar o relatório (${response.status})`);
+    }
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    // O Firefox só dispara o download de forma fiável se o <a> estiver no
+    // DOM no momento do .click() — remove-se logo a seguir.
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+    return { localUri: blobUrl, mimeType, openedInBrowser: true };
   }
 
   const destination = new File(Paths.cache, filename);

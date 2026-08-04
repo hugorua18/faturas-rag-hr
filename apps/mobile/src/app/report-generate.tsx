@@ -240,7 +240,7 @@ export default function ReportGenerateScreen() {
                       />
                       <Text style={[styles.reportRowText, { color: theme.text }]}>
                         {entry.format === 'pdf' ? 'Relatório PDF' : 'Relatório Excel'}
-                        {entry.report.openedInBrowser ? ' — aberto numa nova aba' : ' gerado'}
+                        {entry.report.openedInBrowser ? ' — descarregado' : ' gerado'}
                       </Text>
                       {!entry.report.openedInBrowser && (
                         <Pressable onPress={() => handleShare(entry)} hitSlop={10}>
