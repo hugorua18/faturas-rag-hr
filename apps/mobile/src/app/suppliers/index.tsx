@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useFocusEffect } from 'expo-router';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -46,7 +46,12 @@ const VAT_CHOICES: { value: VatChoice; label: string }[] = [
 // validação de faturas sem depender do servidor. Ver use-supplier-name-autofill.
 export default function SuppliersScreen() {
   const theme = useTheme();
-  const { categories } = useExpenseCategories();
+  const {
+    categories,
+    loading: categoriesLoading,
+    error: categoriesError,
+    reload: reloadCategories,
+  } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
   const { defaults: supplierVatDefaults, reload: reloadVatDefaults } = useSupplierVatDefaults();
   const { defaults: supplierCategoryDefaults, reload: reloadCategoryDefaults } = useSupplierCategoryDefaults();
@@ -292,7 +297,21 @@ export default function SuppliersScreen() {
                 </Pressable>
               )}
             </View>
-            <CategoryChipPicker theme={theme} value={formCategory} onChange={setFormCategory} categories={categories} />
+            {categoriesError ? (
+              <View style={styles.categoriesErrorRow}>
+                <Ionicons name="cloud-offline-outline" size={16} color={theme.destructive} />
+                <Text style={[styles.categoriesErrorText, { color: theme.destructive }]}>
+                  Não foi possível carregar as categorias.
+                </Text>
+                <Pressable onPress={() => reloadCategories()}>
+                  <Text style={[styles.categoriesRetryText, { color: theme.accent }]}>Tentar novamente</Text>
+                </Pressable>
+              </View>
+            ) : categoriesLoading && categories.length === 0 ? (
+              <ActivityIndicator style={styles.categoriesSpinner} size="small" color={theme.textSecondary} />
+            ) : (
+              <CategoryChipPicker theme={theme} value={formCategory} onChange={setFormCategory} categories={categories} />
+            )}
             {showVatDefault && (
               <>
                 <Text style={[styles.vatLabel, { color: theme.textSecondary }]}>
@@ -354,6 +373,10 @@ const styles = StyleSheet.create({
   vatRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   categoryLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
   clearCategoryText: { fontSize: 12.5, fontWeight: '600' },
+  categoriesErrorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+  categoriesErrorText: { fontSize: 13.5 },
+  categoriesRetryText: { fontSize: 13.5, fontWeight: '600' },
+  categoriesSpinner: { alignSelf: 'flex-start', marginTop: 8 },
   vatChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   vatChipText: { fontSize: 13.5, fontWeight: '600' },
   deleteAction: {

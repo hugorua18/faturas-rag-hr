@@ -89,7 +89,12 @@ export default function ValidationScreen() {
     capture && capture.fileMimeType.startsWith('image/') ? capture.fileUri : null,
   );
   const [type, setType] = useState<string | null>(null);
-  const { categories } = useExpenseCategories();
+  const {
+    categories,
+    loading: categoriesLoading,
+    error: categoriesError,
+    reload: reloadCategories,
+  } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
   const { defaults: supplierVatDefaults } = useSupplierVatDefaults();
   const {
@@ -573,7 +578,19 @@ export default function ValidationScreen() {
             )}
 
             <SectionHeader label="Tipo de despesa" theme={theme} />
-            <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+            {categoriesError ? (
+              <View style={styles.errorRow}>
+                <Ionicons name="cloud-offline-outline" size={16} color={theme.destructive} />
+                <Text style={[styles.errorText, { color: theme.destructive }]}>Não foi possível carregar as categorias.</Text>
+                <Pressable onPress={() => reloadCategories()}>
+                  <Text style={[styles.retryText, { color: theme.accent }]}>Tentar novamente</Text>
+                </Pressable>
+              </View>
+            ) : categoriesLoading && categories.length === 0 ? (
+              <ActivityIndicator style={styles.categoriesSpinner} size="small" color={theme.textSecondary} />
+            ) : (
+              <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+            )}
 
             {vatSettings.vatClassificationEnabled && (
               <>
@@ -643,6 +660,8 @@ const styles = StyleSheet.create({
   conversionPreview: { fontSize: 13, marginTop: 8, marginLeft: 4 },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16 },
   errorText: { fontSize: 13.5 },
+  retryText: { fontSize: 13.5, fontWeight: '600' },
+  categoriesSpinner: { alignSelf: 'flex-start', marginTop: 8 },
   primaryButton: { paddingVertical: 14, paddingHorizontal: 28, borderRadius: 24 },
   primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   submitButton: { marginTop: 28, paddingVertical: 16, borderRadius: 14, alignItems: 'center' },

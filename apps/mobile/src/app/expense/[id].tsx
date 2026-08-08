@@ -64,7 +64,12 @@ export default function ExpenseDetailScreen() {
   // corra em todos os renders, por isso a condição vive dentro do argumento.
   const aspectRatio = useImageAspectRatio(expense?.fileUrl ? resolveFileUrl(expense.fileUrl) : null);
   const [type, setType] = useState<string | null>(null);
-  const { categories } = useExpenseCategories();
+  const {
+    categories,
+    loading: categoriesLoading,
+    error: categoriesError,
+    reload: reloadCategories,
+  } = useExpenseCategories();
   const { settings: vatSettings } = useAccountVatSettings();
   const {
     defaults: supplierCategoryDefaults,
@@ -467,7 +472,19 @@ export default function ExpenseDetailScreen() {
             )}
 
             <SectionHeader label="Tipo de despesa" theme={theme} />
-            <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+            {categoriesError ? (
+              <View style={styles.errorRow}>
+                <Ionicons name="cloud-offline-outline" size={16} color={theme.destructive} />
+                <Text style={[styles.errorText, { color: theme.destructive }]}>Não foi possível carregar as categorias.</Text>
+                <Pressable onPress={() => reloadCategories()}>
+                  <Text style={[styles.retryText, { color: theme.accent }]}>Tentar novamente</Text>
+                </Pressable>
+              </View>
+            ) : categoriesLoading && categories.length === 0 ? (
+              <ActivityIndicator style={styles.categoriesSpinner} size="small" color={theme.textSecondary} />
+            ) : (
+              <CategoryChipPicker theme={theme} value={type} onChange={setType} categories={categories} />
+            )}
 
             {vatSettings.vatClassificationEnabled && (
               <>
@@ -563,6 +580,8 @@ const styles = StyleSheet.create({
   conversionPreview: { fontSize: 13, marginTop: 8, marginLeft: 4 },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16 },
   errorText: { fontSize: 13.5 },
+  retryText: { fontSize: 13.5, fontWeight: '600' },
+  categoriesSpinner: { alignSelf: 'flex-start', marginTop: 8 },
   submitButton: { marginTop: 28, paddingVertical: 16, borderRadius: 14, alignItems: 'center' },
   submitButtonText: { color: '#fff', fontSize: 16.5, fontWeight: '600' },
   deleteButton: { marginTop: 16, paddingVertical: 14, alignItems: 'center' },
