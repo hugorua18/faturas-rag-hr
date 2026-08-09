@@ -10,6 +10,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { API_BASE_URL } from '@/api/config';
 import { getSessionToken } from '@/state/session';
 import { importSharedFile } from '@/utils/import-document';
+import { preloadExpenseCategories } from '@/hooks/use-expense-categories';
 // Import com efeito: captura o ?code=... do regresso OAuth Web no arranque,
 // antes de o router (index/guard) apagar a query string — ver o comentário
 // no próprio módulo. O módulo do ecrã /login só executa quando a rota monta,
@@ -49,6 +50,14 @@ export default function RootLayout() {
   // parecia a app congelada).
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`).catch(() => {});
+  }, []);
+
+  // Pré-carrega as categorias assim que a app abre — para quando o
+  // utilizador chegar à câmara/upload, a cópia local já está quente e o
+  // pedido ao servidor já pode ter respondido, evitando a espera visível no
+  // seletor "Tipo de despesa" (ver use-expense-categories.ts).
+  useEffect(() => {
+    preloadExpenseCategories();
   }, []);
 
   // Ficheiros partilhados de outras apps (share sheet / "Abrir em…"): o iOS
