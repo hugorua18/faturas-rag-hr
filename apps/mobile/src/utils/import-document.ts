@@ -55,6 +55,18 @@ export function normalizeSharedFileUrl(rawUrl: string): string | null {
   return null;
 }
 
+// O iOS resolve "/var" como link simbólico para "/private/var" de forma
+// inconsistente entre APIs diferentes: o URL entregue pelo "Abrir em..." vem
+// tipicamente já resolvido ("/private/var/mobile/Containers/..."), enquanto
+// Paths.document.uri (FileManager.urls(for: .documentDirectory)) devolve a
+// forma NÃO resolvida ("/var/mobile/Containers/..."). Sem normalizar os dois
+// lados antes de comparar, a verificação de sandbox abaixo rejeitava SEMPRE
+// um ficheiro partilhado legítimo — startsWith() nunca via a mesma string,
+// apesar de ser exatamente o mesmo ficheiro no disco.
+function normalizeIosSymlinkPrefix(uri: string): string {
+  return uri.replace(/^file:\/\/\/private\/var\//, 'file:///var/');
+}
+
 // "invoicescanner://" é um scheme público — qualquer site ou app pode invocar
 // um deep link com esse prefixo, não só o "Abrir em..." genuíno do iOS. Antes
 // de tratar o caminho reescrito como um ficheiro partilhado legítimo, confirma
@@ -64,9 +76,10 @@ export function normalizeSharedFileUrl(rawUrl: string): string | null {
 // formato de Paths.document.uri é diferente e a verificação não se aplica.
 function isWithinAppSandbox(fileUri: string): boolean {
   if (Platform.OS !== 'ios') return true;
-  const containerMatch = Paths.document.uri.match(/^(file:\/\/.*\/Containers\/Data\/Application\/[^/]+)\//);
+  const documentUri = normalizeIosSymlinkPrefix(Paths.document.uri);
+  const containerMatch = documentUri.match(/^(file:\/\/.*\/Containers\/Data\/Application\/[^/]+)\//);
   if (!containerMatch) return true; // formato inesperado (ex: simulador antigo) — não bloqueia o fluxo legítimo
-  return fileUri.startsWith(containerMatch[1]);
+  return normalizeIosSymlinkPrefix(fileUri).startsWith(containerMatch[1]);
 }
 
 // Ficheiro entregue pelo iOS via share sheet / "Abrir em…" (CFBundleDocumentTypes
@@ -76,7 +89,14 @@ function isWithinAppSandbox(fileUri: string): boolean {
 // próprio, com o estado "A analisar a fatura…".
 export function importSharedFile(rawUrl: string): boolean {
   const fileUri = normalizeSharedFileUrl(rawUrl);
-  if (!fileUri || !isWithinAppSandbox(fileUri)) return false;
+  if (!fileUri) {
+    notify('Ficheiro não suportado', 'Não foi possível importar este ficheiro.');
+    return false;
+  }
+  if (!isWithinAppSandbox(fileUri)) {
+    notify('Ficheiro não suportado', 'Não foi possível importar este ficheiro.');
+    return false;
+  }
   const name = decodeURIComponent(fileUri.split('/').pop() ?? '') || 'documento';
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const mimeType = SHARED_FILE_MIME_TYPES[ext];
