@@ -56,10 +56,13 @@ function collectAttachmentParts(part: gmail_v1.Schema$MessagePart | undefined, o
   }
 }
 
+// .trim(): valores colados no dashboard do Render podem trazer espaços/newlines
+// invisíveis — um refresh token com esse lixo à volta é rejeitado pela Google
+// com "invalid_grant", indistinguível à vista de um token genuinamente inválido.
 function getGmailClient(): gmail_v1.Gmail | null {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
   if (!clientId || !clientSecret || !refreshToken) return null;
 
   const auth = new google.auth.OAuth2(clientId, clientSecret);
