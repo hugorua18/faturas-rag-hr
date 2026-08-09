@@ -285,7 +285,7 @@ function CameraScreen() {
           {busy ? <ActivityIndicator color="#fff" /> : <View style={styles.shutterInner} />}
         </Pressable>
         <Pressable style={styles.uploadButton} onPress={handleUploadDocument} disabled={busy}>
-          <Ionicons name="document-attach-outline" size={20} color="#fff" />
+          {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="document-attach-outline" size={20} color="#fff" />}
         </Pressable>
       </View>
     </View>

@@ -32,7 +32,8 @@ export default function AcquirerNifListScreen() {
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [importing, setImporting] = useState(false);
+  const [importingSource, setImportingSource] = useState<'file' | 'gallery' | null>(null);
+  const importing = importingSource !== null;
   const [editingNif, setEditingNif] = useState<string | null>(null);
   const [labelInput, setLabelInput] = useState('');
   const [iconInput, setIconInput] = useState<string>(DEFAULT_ACQUIRER_NIF_ICON);
@@ -78,23 +79,23 @@ export default function AcquirerNifListScreen() {
     }
   }
 
-  async function runImport(importer: () => Promise<boolean>) {
+  async function runImport(source: 'file' | 'gallery', importer: () => Promise<boolean>) {
     if (importing) return;
-    setImporting(true);
+    setImportingSource(source);
     try {
       const navigated = await importer();
       if (navigated) setAddMenuOpen(false);
     } finally {
-      setImporting(false);
+      setImportingSource(null);
     }
   }
 
   function handleImportFile() {
-    void runImport(pickAndImportDocument);
+    void runImport('file', pickAndImportDocument);
   }
 
   function handleImportFromGallery() {
-    void runImport(pickAndImportFromGallery);
+    void runImport('gallery', pickAndImportFromGallery);
   }
 
   function handleTakePhoto() {
@@ -168,13 +169,13 @@ export default function AcquirerNifListScreen() {
               onPress={handleImportFile}
               disabled={importing}
             >
-              {importing ? (
+              {importingSource === 'file' ? (
                 <ActivityIndicator color={theme.accent} />
               ) : (
                 <Ionicons name="document-attach-outline" size={20} color={theme.accent} />
               )}
               <Text style={[styles.menuOptionText, { color: theme.text }]}>
-                {importing ? 'A processar…' : 'Adicionar ficheiro'}
+                {importingSource === 'file' ? 'A processar…' : 'Adicionar ficheiro'}
               </Text>
             </Pressable>
             <Pressable
@@ -182,8 +183,14 @@ export default function AcquirerNifListScreen() {
               onPress={handleImportFromGallery}
               disabled={importing}
             >
-              <Ionicons name="images-outline" size={20} color={theme.accent} />
-              <Text style={[styles.menuOptionText, { color: theme.text }]}>Escolher da fototeca</Text>
+              {importingSource === 'gallery' ? (
+                <ActivityIndicator color={theme.accent} />
+              ) : (
+                <Ionicons name="images-outline" size={20} color={theme.accent} />
+              )}
+              <Text style={[styles.menuOptionText, { color: theme.text }]}>
+                {importingSource === 'gallery' ? 'A processar…' : 'Escolher da fototeca'}
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.menuOption, { backgroundColor: theme.backgroundElement }]}
